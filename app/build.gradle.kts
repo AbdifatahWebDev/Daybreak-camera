@@ -20,6 +20,9 @@ val hasReleaseKey = keystorePath != null && file(keystorePath).exists()
 android {
     namespace = "com.brekwol.daybreak"
     compileSdk = 37
+    // Must match :core:engine. The app module strips debug symbols from the
+    // native libraries it packages, and needs this NDK to do it.
+    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         applicationId = "com.brekwol.daybreak"
