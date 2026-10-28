@@ -1,0 +1,140 @@
+# Builds the release APK. Runs only for version tags (v*) and manual runs,
+# never on ordinary pushes, to save Actions minutes.
+#   v0.1.0       -> GitHub release
+#   v0.1.0-rc.1  -> GitHub pre-release
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Build and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      NDK_VERSION: "30.0.16248370"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install the Android NDK
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+            name="${GITHUB_REF_NAME#v}"
+          else
+            name="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          base="${name%%-*}"
+          IFS=. read -r major minor patch <<< "$base"
+          code=$(( ${major:-0} * 10000 + ${minor:-0} * 100 + ${patch:-0} ))
+          if (( code < 1 )); then code=1; fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [[ "$name" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare the signing key
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DAYBREAK_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "DAYBREAK_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No signing secrets: the APK is signed with a temporary key."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the release APK
+        shell: bash
+        env:
+          DAYBREAK_KEYSTORE_PASSWORD: ${{ secrets.DAYBREAK_KEYSTORE_PASSWORD }}
+          DAYBREAK_KEY_ALIAS: ${{ secrets.DAYBREAK_KEY_ALIAS }}
+          DAYBREAK_KEY_PASSWORD: ${{ secrets.DAYBREAK_KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace assembleRelease \
+            -PdaybreakVersionName="${{ steps.version.outputs.name }}" \
+            -PdaybreakVersionCode="${{ steps.version.outputs.code }}" 2>&1 | tee build.log
+
+      - name: Collect the APK
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/daybreak-${{ steps.version.outputs.name }}.apk"
+          (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: daybreak-${{ steps.version.outputs.name }}
+          path: dist/
+
+      - name: Publish the GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Daybreak ${{ steps.version.outputs.name }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          files: dist/*
+          body: |
+            Daybreak ${{ steps.version.outputs.name }} for Android 10 and newer (64-bit ARM phones).
+
+            Install `daybreak-${{ steps.version.outputs.name }}.apk`. Photos are saved as JPEG XL in `DCIM/Daybreak`.
+            Most gallery apps can't show JPEG XL yet: use Daybreak's library, and **Share** sends a JPEG copy.
+
+            ${{ steps.signing.outputs.signed == 'true' && 'Signed with the Daybreak release key.' || '**Test build:** signed with a temporary key. When the permanent key is added, uninstall this build before installing the next one.' }}
+
+      - name: Save the build log for review
+        if: failure()
+        shell: bash
+        run: |
+          log="build.log"
+          [[ -f "$log" ]] || echo "The run failed before the Gradle build started." > "$log"
+          git config user.name "Daybreak CI"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          dest="logs/${GITHUB_REF_NAME//\//_}-run${GITHUB_RUN_NUMBER}.log"
+          tmp="$(mktemp -d)"
+          if git ls-remote --exit-code --heads origin ci-logs > /dev/null 2>&1; then
+            git fetch --depth=1 origin ci-logs
+            git worktree add --detach "$tmp" FETCH_HEAD
+          else
+            git worktree add --detach "$tmp"
+            (cd "$tmp" && git checkout --orphan ci-logs && git rm -rf --quiet .)
+          fi
+          mkdir -p "$tmp/logs"
+          tail -c 900000 "$log" > "$tmp/$dest"
+          (cd "$tmp" && git add "$dest" && git commit -m "CI log for $GITHUB_REF_NAME run $GITHUB_RUN_NUMBER" && git push origin HEAD:refs/heads/ci-logs)

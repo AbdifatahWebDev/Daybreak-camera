@@ -1,0 +1,164 @@
+<p align="center">
+  <img src="docs/assets/daybreak-icon.svg" width="112" alt="Daybreak icon">
+</p>
+
+<h1 align="center">Daybreak</h1>
+
+<p align="center">
+  An open-source pro camera and photo editor for Android.<br>
+  It saves only modern formats: <b>JPEG XL</b> and <b>HEIC</b>.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later">
+  <img src="https://img.shields.io/badge/Android-10%2B-3ddc84" alt="Android 10+">
+  <img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status: early development">
+</p>
+
+---
+
+> **Status:** v0.1 "First light", the first test release: photo capture, JPEG XL saving, library, viewer and settings. See the [roadmap](#roadmap).
+
+## What works in v0.1
+
+- Photo capture with tap to focus, pinch or tap zoom, grid, front and back camera
+- Every photo saved as **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) in `DCIM/Daybreak`
+- The shutter never waits: photos encode in the background while you keep shooting
+- Library grid with fast cached thumbnails, full-screen viewer with zoom, photo info and delete
+- Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet
+
+Not in v0.1 yet: manual controls, RAW, HEIC, the editor and the other modes. They follow the roadmap.
+
+## Why Daybreak
+
+Phone cameras capture 10-bit color and HDR, then most apps throw it away by saving 8-bit JPEG. Daybreak keeps it:
+
+- **JPEG XL** by default: smaller than JPEG at the same quality, with a true lossless mode, 10/16-bit color and HDR.
+- **HEIC** on phones with a hardware HEVC encoder.
+- **No JPEG in your library.** When you share to an app that can't open JPEG XL, Daybreak makes a temporary JPEG or PNG copy for that share only.
+- **Non-destructive editing.** Your original file is never changed.
+- **No account, no ads, no tracking.** Everything stays on your phone.
+
+## Features (planned for v1.0)
+
+**Capture**
+- Photo, Pro, Night, Portrait, Video and Scan modes
+- Full manual control: ISO, shutter speed, focus, white balance
+- RAW capture with DNG alongside the photo
+- Live histogram, level, focus peaking and zebra highlights
+- HDR and Night frame merging
+- 4K HEVC 10-bit HDR video
+- Document scanning to PDF and QR code reading
+
+**Editor**
+- Light, Color mixer, Curves, Detail, Crop and straighten
+- Brush, linear and radial masks
+- Presets you can save and share
+- Undo, redo and hold-to-compare
+- Video trim, speed and mute
+
+**Library**
+- Fast grid with format badges, albums, search and multi-select
+- Photo info: ISO, shutter, aperture, lens, format and file size
+- Share sheet that converts to JPEG or PNG when needed
+
+## Tech stack
+
+| Layer | Choice |
+| --- | --- |
+| UI | Kotlin + Jetpack Compose |
+| Camera | CameraX with Camera2 interop |
+| Image engine | C++23 via JNI, built with CMake + Clang (Android NDK) |
+| GPU | Vulkan compute |
+| JPEG XL | [libjxl](https://github.com/libjxl/libjxl) |
+| HEIC | Android hardware HEVC encoder via HeifWriter |
+| Data | Room (SQLite) and DataStore |
+
+The C++ engine has no Android dependencies outside its JNI and platform folders, so it builds and runs its tests on a desktop too.
+
+## Building
+
+You need:
+
+- Android Studio (current stable) or the Android SDK command-line tools
+- JDK 17 or newer
+- Android NDK r30
+- CMake and Ninja (installed through the SDK Manager)
+
+```bash
+git clone https://github.com/AbdifatahWebDev/Daybreak-camera.git
+cd Daybreak-camera
+./gradlew assembleDebug
+```
+
+The first build downloads libjxl 0.12 (and its highway, brotli and skcms parts) from GitHub through CMake, so it needs internet access and takes a few minutes.
+
+The debug APK lands in `app/build/outputs/apk/debug/`. It installs beside a release build as `com.brekwol.daybreak.debug`.
+
+### Native engine tests on a desktop
+
+```bash
+cmake -S native -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DDAYBREAK_BUILD_TESTS=ON -DDAYBREAK_SANITIZE=ON
+cmake --build build-native
+ctest --test-dir build-native
+```
+
+## Project structure
+
+```
+app/                 Screens (capture, library, viewer, settings) and data (MediaStore, DataStore)
+core/designsystem/   Daybreak colors, type, fonts, icons and shared components
+core/engine/         Kotlin API over the native engine
+native/              C++23 engine: libjxl codec, EXIF, resizing, JNI bridge, tests
+docs/                Assets and notes
+```
+
+More modules (camera, editor, and so on) split out as the app grows.
+
+## Roadmap
+
+| Release | Scope |
+| --- | --- |
+| v0.1 First light | Photo capture, JPEG XL saving, library grid and viewer |
+| v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level |
+| v0.3 Editor | Vulkan editor: Light, Color, Curves, Detail, Crop, presets, share sheet |
+| v0.4 Modes | HDR, Night, Portrait, Scan, video recording and trim |
+| v0.5 Library+ | Albums, search, multi-select, masks, landscape and tablet layouts |
+| v1.0 | Accessibility, translations, release on F-Droid and Google Play |
+
+## Releases
+
+Pushing a version tag builds and publishes a release on GitHub Actions:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0        # release
+git tag v0.2.0-rc.1 && git push origin v0.2.0-rc.1   # pre-release
+```
+
+Releases are signed with the key stored in these repository secrets (Settings › Secrets and variables › Actions): `DAYBREAK_KEYSTORE_BASE64`, `DAYBREAK_KEYSTORE_PASSWORD`, `DAYBREAK_KEY_ALIAS`, `DAYBREAK_KEY_PASSWORD`. Without them the APK is signed with a temporary key and marked as a test build.
+
+The **Checks** workflow (engine tests under sanitizers, debug build, unit tests) runs only when started by hand from the Actions tab.
+
+## Contributing
+
+Daybreak is in early development, so please open an issue before starting a larger change. Bug reports with your phone model and Android version are very welcome.
+
+Builds run on GitHub Actions only for version tags and manual runs, not on every push.
+
+## Privacy
+
+Daybreak works fully offline. It has no account, no analytics, no ads and no network access for its core features. Location tagging is off until you turn it on.
+
+## License
+
+Daybreak is free software under the [GNU General Public License v3.0 or later](LICENSE).
+
+Third-party code keeps its own license, including:
+
+- [libjxl](https://github.com/libjxl/libjxl): BSD-3-Clause
+- [Inter Tight](https://github.com/googlefonts/inter-tight) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono): SIL Open Font License 1.1 (see `third_party/fonts/`)
+
+---
+
+<p align="center">Made by Abdifatah · <a href="https://brekwol.com">Brekwol</a></p>

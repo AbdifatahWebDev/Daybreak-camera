@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Daybreak app icon</title>
+  <defs>
+    <clipPath id="lens"><circle cx="512" cy="512" r="262"/></clipPath>
+  </defs>
+  <rect width="1024" height="1024" rx="232" fill="#0b0a09"/>
+  <circle cx="512" cy="512" r="300" fill="none" stroke="#f4efe6" stroke-width="28"/>
+  <g clip-path="url(#lens)">
+    <circle cx="512" cy="590" r="168" fill="#ffb020"/>
+    <rect x="200" y="590" width="624" height="260" fill="#0b0a09"/>
+    <rect x="382" y="624" width="260" height="16" rx="8" fill="#ffb020"/>
+    <rect x="422" y="660" width="180" height="16" rx="8" fill="#ffb020" opacity="0.7"/>
+    <rect x="462" y="696" width="100" height="16" rx="8" fill="#ffb020" opacity="0.45"/>
+  </g>
+</svg>

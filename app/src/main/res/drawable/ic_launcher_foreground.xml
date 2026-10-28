@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Daybreak icon: a lens ring around a rising sun and its reflection. 108dp canvas, art inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M25.8,54a28.2,28.2 0,1 1,56.4,0a28.2,28.2 0,1 1,-56.4,0z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFF4EFE6"
+        android:strokeWidth="2.6" />
+    <path
+        android:pathData="M38.2,61.3A15.8,15.8 0,0 1,69.8,61.3Z"
+        android:fillColor="#FFFFB020" />
+    <path
+        android:pathData="M42.55,64.5H65.45A0.75,0.75 0,0 1,65.45,66H42.55A0.75,0.75 0,0 1,42.55,64.5Z"
+        android:fillColor="#FFFFB020" />
+    <path
+        android:pathData="M46.25,67.9H61.75A0.75,0.75 0,0 1,61.75,69.4H46.25A0.75,0.75 0,0 1,46.25,67.9Z"
+        android:fillAlpha="0.7"
+        android:fillColor="#FFFFB020" />
+    <path
+        android:pathData="M50.05,71.3H57.95A0.75,0.75 0,0 1,57.95,72.8H50.05A0.75,0.75 0,0 1,50.05,71.3Z"
+        android:fillAlpha="0.45"
+        android:fillColor="#FFFFB020" />
+</vector>
