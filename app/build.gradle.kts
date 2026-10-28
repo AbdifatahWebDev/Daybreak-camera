@@ -13,6 +13,10 @@ val daybreakVersionName: String = providers.gradleProperty("daybreakVersionName"
     .getOrElse("0.0.0-dev")
 val daybreakVersionCode = providers.gradleProperty("daybreakVersionCode").getOrElse("1").toInt()
 
+// The GitHub build updates itself from this repository's releases.
+val daybreakUpdateRepo: String = providers.gradleProperty("daybreakUpdateRepo")
+    .getOrElse("AbdifatahWebDev/Daybreak-camera")
+
 // Release signing comes from environment variables set by CI from repository secrets.
 val keystorePath: String? = System.getenv("DAYBREAK_KEYSTORE")
 val hasReleaseKey = keystorePath != null && file(keystorePath).exists()
@@ -32,6 +36,22 @@ android {
         versionName = daybreakVersionName
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // github: the APK on GitHub Releases, which updates itself.
+    // store:  for Google Play and F-Droid, which update apps themselves.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER", "true")
+            buildConfigField("String", "UPDATE_REPO", "\"$daybreakUpdateRepo\"")
+        }
+        create("store") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER", "false")
+            buildConfigField("String", "UPDATE_REPO", "\"\"")
         }
     }
 

@@ -83,6 +83,7 @@ import com.brekwol.daybreak.designsystem.DaybreakIconButton
 import com.brekwol.daybreak.designsystem.FormatBadge
 import com.brekwol.daybreak.designsystem.R as DsR
 import com.brekwol.daybreak.designsystem.ShutterButton
+import com.brekwol.daybreak.update.UpdateState
 import java.util.concurrent.Executors
 import kotlinx.coroutines.launch
 
@@ -146,6 +147,8 @@ private fun CameraContent(
     val settings by container.settings.settings.collectAsStateWithLifecycle(initialValue = DaybreakSettings())
     val pending by container.saveQueue.pending.collectAsStateWithLifecycle()
     val lastSaved by container.saveQueue.lastSaved.collectAsStateWithLifecycle()
+    val update by container.updates.state.collectAsStateWithLifecycle()
+    val updateWaiting = update is UpdateState.Available || update is UpdateState.Ready
 
     val controller = remember {
         LifecycleCameraController(context).apply {
@@ -253,11 +256,23 @@ private fun CameraContent(
                 tint = if (settings.grid) colors.sun else colors.ink,
                 onClick = { scope.launch { container.settings.setGrid(!settings.grid) } },
             )
-            DaybreakIconButton(
-                iconRes = DsR.drawable.ic_settings,
-                contentDescription = "Settings",
-                onClick = onOpenSettings,
-            )
+            Box {
+                DaybreakIconButton(
+                    iconRes = DsR.drawable.ic_settings,
+                    contentDescription = if (updateWaiting) "Settings, update available" else "Settings",
+                    onClick = onOpenSettings,
+                )
+                if (updateWaiting) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 10.dp, end = 10.dp)
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(colors.sun),
+                    )
+                }
+            }
         }
 
         // Viewfinder, 3:4.

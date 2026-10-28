@@ -2,6 +2,9 @@ package com.brekwol.daybreak.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
+import android.text.format.DateUtils
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -45,6 +49,9 @@ import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakChip
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
 import com.brekwol.daybreak.designsystem.R as DsR
+import com.brekwol.daybreak.update.InstallStart
+import com.brekwol.daybreak.update.UpdateState
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
@@ -145,6 +152,58 @@ fun SettingsScreen(onBack: () -> Unit) {
             )
         }
 
+        if (container.updates.enabled) {
+            val update by container.updates.state.collectAsStateWithLifecycle()
+            Section("UPDATES") {
+                UpdateStatus(
+                    state = update,
+                    currentVersion = container.updates.currentVersion,
+                    onCheck = { container.updates.checkNow() },
+                    onDownload = { container.updates.download() },
+                    onInstall = {
+                        if (container.updates.install() == InstallStart.NeedsPermission) {
+                            Toast.makeText(
+                                context,
+                                "Allow Daybreak to install updates, then tap Install again.",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:${context.packageName}"),
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                    onOpenPage = { url -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
+                )
+                Divider()
+                SwitchRow(
+                    label = "Check for updates",
+                    description = "Looks for a new version on GitHub once a day.",
+                    checked = settings.updateAutoCheck,
+                    onChange = { scope.launch { container.settings.setUpdateAutoCheck(it) } },
+                )
+                Divider()
+                SwitchRow(
+                    label = "Download automatically",
+                    description = "Downloads new versions in the background on Wi-Fi.",
+                    checked = settings.updateAutoDownload && settings.updateAutoCheck,
+                    enabled = settings.updateAutoCheck,
+                    onChange = { scope.launch { container.settings.setUpdateAutoDownload(it) } },
+                )
+                Divider()
+                SwitchRow(
+                    label = "Include test builds",
+                    description = "Also offers pre-releases, which may have bugs.",
+                    checked = settings.updatePreReleases,
+                    onChange = { scope.launch { container.settings.setUpdatePreReleases(it) } },
+                )
+            }
+        }
+
         Section("ABOUT") {
             ValueRow("Version", BuildConfig.VERSION_NAME)
             Divider()
@@ -213,6 +272,7 @@ private fun SwitchRow(
     description: String,
     checked: Boolean,
     onChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     val colors = Daybreak.colors
     Row(
@@ -223,13 +283,14 @@ private fun SwitchRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, style = Daybreak.type.body, color = colors.ink)
+            Text(label, style = Daybreak.type.body, color = if (enabled) colors.ink else colors.inkMuted)
             Text(description, style = Daybreak.type.caption, color = colors.inkMuted)
         }
         Box(Modifier.padding(start = 12.dp)) {
             Switch(
                 checked = checked,
                 onCheckedChange = onChange,
+                enabled = enabled,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = colors.onSun,
                     checkedTrackColor = colors.sun,
@@ -240,4 +301,130 @@ private fun SwitchRow(
             )
         }
     }
+}
+
+@Composable
+private fun UpdateStatus(
+    state: UpdateState,
+    currentVersion: String,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenPage: (String) -> Unit,
+) {
+    val colors = Daybreak.colors
+    val title: String
+    val detail: String
+    var action: Pair<String, () -> Unit>? = "Check now" to onCheck
+    when (state) {
+        UpdateState.Idle -> {
+            title = "Daybreak $currentVersion"
+            detail = "Not checked yet"
+        }
+        UpdateState.Checking -> {
+            title = "Daybreak $currentVersion"
+            detail = "Checking GitHub…"
+            action = null
+        }
+        is UpdateState.UpToDate -> {
+            title = "Daybreak $currentVersion"
+            detail = "Up to date · checked ${checkedAgo(state.checkedAt)}"
+        }
+        is UpdateState.Available -> {
+            title = "Daybreak ${state.release.version} is out"
+            detail = "${formatSize(state.release.apkSize)} · you have $currentVersion"
+            action = "Download" to onDownload
+        }
+        is UpdateState.Downloading -> {
+            title = "Downloading ${state.release.version}"
+            detail = if (state.progress >= 0f) "${(state.progress * 100).roundToInt()}% of ${formatSize(state.release.apkSize)}" else "Starting…"
+            action = null
+        }
+        is UpdateState.Ready -> {
+            title = "Daybreak ${state.release.version} is ready"
+            detail = "Daybreak closes while it updates."
+            action = "Install" to onInstall
+        }
+        is UpdateState.Installing -> {
+            title = "Installing ${state.release.version}"
+            detail = "Confirm in the Android dialog if it asks."
+            action = null
+        }
+        is UpdateState.Failed -> {
+            title = if (state.reinstall) "Can't update this copy" else "Update failed"
+            detail = state.message
+            val page = state.release?.pageUrl
+            if (state.reinstall && page != null) action = "Open GitHub" to { onOpenPage(page) }
+        }
+    }
+
+    Column(Modifier.padding(vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = Daybreak.type.body, color = colors.ink)
+                Text(detail, style = Daybreak.type.caption, color = colors.inkMuted)
+            }
+            action?.let { (label, onClick) ->
+                Box(
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.sun)
+                        .clickable(onClick = onClick)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                ) {
+                    Text(label, style = Daybreak.type.label, color = colors.onSun)
+                }
+            }
+        }
+        if (state is UpdateState.Downloading) {
+            Spacer(Modifier.height(10.dp))
+            if (state.progress >= 0f) {
+                LinearProgressIndicator(
+                    progress = { state.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = colors.sun,
+                    trackColor = colors.line,
+                )
+            } else {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = colors.sun,
+                    trackColor = colors.line,
+                )
+            }
+        }
+        val release = when (state) {
+            is UpdateState.Available -> state.release
+            is UpdateState.Ready -> state.release
+            else -> null
+        }
+        if (release != null && release.pageUrl.isNotBlank()) {
+            Text(
+                text = "What's new",
+                style = Daybreak.type.label,
+                color = colors.sun,
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable { onOpenPage(release.pageUrl) }
+                    .padding(vertical = 6.dp),
+            )
+        }
+    }
+}
+
+private fun checkedAgo(time: Long): String {
+    val now = System.currentTimeMillis()
+    return if (now - time < DateUtils.MINUTE_IN_MILLIS) {
+        "just now"
+    } else {
+        DateUtils.getRelativeTimeSpanString(time, now, DateUtils.MINUTE_IN_MILLIS).toString()
+    }
+}
+
+private fun formatSize(bytes: Long): String = when {
+    bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
+    bytes >= 1_000 -> String.format(Locale.US, "%d KB", bytes / 1_000)
+    else -> "$bytes B"
 }

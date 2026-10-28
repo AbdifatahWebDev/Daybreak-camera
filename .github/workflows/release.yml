@@ -58,10 +58,18 @@ jobs:
             echo "::error::'$name' is not a version like 1.2.3 or 1.2.3-rc.1"
             exit 1
           fi
+          # Version code: 0.1.1 -> 10199, 0.2.0-rc.3 -> 20003, 0.2.0 -> 20099.
+          # A release sorts above its pre-releases, so updates always go up.
           base="${name%%-*}"
+          pre="${name#"$base"}"
           IFS=. read -r major minor patch <<< "$base"
-          code=$(( major * 10000 + minor * 100 + patch ))
-          if (( code < 1 )); then code=1; fi
+          if [[ -z "$pre" ]]; then
+            step=99
+          else
+            n="$(grep -oE '[0-9]+' <<< "$pre" | tail -1 || true)"
+            step=$(( 10#${n:-0} > 98 ? 98 : 10#${n:-0} ))
+          fi
+          code=$(( major * 1000000 + minor * 10000 + patch * 100 + step ))
           prerelease=false
           if [[ "$name" == *-* ]]; then prerelease=true; fi
           echo "Version $name, code $code, prerelease $prerelease"
@@ -103,7 +111,7 @@ jobs:
           DAYBREAK_KEY_PASSWORD: ${{ secrets.DAYBREAK_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace assembleRelease \
+          ./gradlew --no-daemon --stacktrace assembleGithubRelease testGithubReleaseUnitTest \
             -PdaybreakVersionName="${{ steps.version.outputs.name }}" \
             -PdaybreakVersionCode="${{ steps.version.outputs.code }}" 2>&1 | tee build.log
 
@@ -111,7 +119,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk "dist/daybreak-${{ steps.version.outputs.name }}.apk"
+          cp app/build/outputs/apk/github/release/app-github-release.apk "dist/daybreak-${{ steps.version.outputs.name }}.apk"
           (cd dist && sha256sum ./*.apk > SHA256SUMS.txt)
 
       - name: Upload the build

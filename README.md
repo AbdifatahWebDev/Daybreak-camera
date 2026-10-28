@@ -17,7 +17,7 @@
 
 ---
 
-> **Status:** v0.1 "First light", the first test release: photo capture, JPEG XL saving, library, viewer and settings. See the [roadmap](#roadmap).
+> **Status:** v0.1 "First light", the first test release: photo capture, JPEG XL saving, library, viewer, settings and in-app updates. See the [roadmap](#roadmap).
 
 ## What works in v0.1
 
@@ -26,6 +26,7 @@
 - The shutter never waits: photos encode in the background while you keep shooting
 - Library grid with fast cached thumbnails, full-screen viewer with zoom, photo info and delete
 - Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet
+- Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
 Not in v0.1 yet: manual controls, RAW, HEIC, the editor and the other modes. They follow the roadmap.
 
@@ -88,12 +89,21 @@ You need:
 ```bash
 git clone https://github.com/AbdifatahWebDev/Daybreak-camera.git
 cd Daybreak-camera
-./gradlew assembleDebug
+./gradlew assembleGithubDebug
 ```
 
 The first build downloads libjxl 0.12 (and its highway, brotli and skcms parts) from GitHub through CMake, so it needs internet access and takes a few minutes.
 
-The debug APK lands in `app/build/outputs/apk/debug/`. It installs beside a release build as `com.brekwol.daybreak.debug`.
+The debug APK lands in `app/build/outputs/apk/github/debug/`. It installs beside a release build as `com.brekwol.daybreak.debug`.
+
+There are two builds of the app:
+
+| Build | For | Updates |
+| --- | --- | --- |
+| `github` | The APK on GitHub Releases | Updates itself from this repository's releases |
+| `store` | Google Play and F-Droid | Left to the store. No updater and no internet permission |
+
+A fork can point the updater at its own releases with `-PdaybreakUpdateRepo=owner/repo`.
 
 ### Native engine tests on a desktop
 
@@ -121,6 +131,7 @@ More modules (camera, editor, and so on) split out as the app grows.
 | Release | Scope |
 | --- | --- |
 | v0.1 First light | Photo capture, JPEG XL saving, library grid and viewer |
+| v0.1.1 | In-app updates from GitHub Releases |
 | v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level |
 | v0.3 Editor | Vulkan editor: Light, Color, Curves, Detail, Crop, presets, share sheet |
 | v0.4 Modes | HDR, Night, Portrait, Scan, video recording and trim |
@@ -151,7 +162,9 @@ Builds run on GitHub Actions only when the version changes or when started by ha
 
 ## Privacy
 
-Daybreak works fully offline. It has no account, no analytics, no ads and no network access for its core features. Location tagging is off until you turn it on.
+Daybreak works fully offline. It has no account, no analytics and no ads, and your photos never leave your phone unless you share them. Location tagging is off until you turn it on.
+
+The only thing that goes online is the updater in the GitHub build. Once a day it asks `api.github.com` for this repository's releases and downloads a new APK from GitHub when there is one. It sends nothing about you or your photos. You can turn it off in Settings › Updates, and the store build doesn't include it.
 
 ## License
 

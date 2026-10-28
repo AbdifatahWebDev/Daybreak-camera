@@ -7,6 +7,7 @@ import com.brekwol.daybreak.data.SaveQueue
 import com.brekwol.daybreak.data.SettingsRepository
 import com.brekwol.daybreak.data.ThumbnailLoader
 import com.brekwol.daybreak.engine.DaybreakEngine
+import com.brekwol.daybreak.update.UpdateManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,6 +19,7 @@ class DaybreakApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        container.updates.onAppStart()
     }
 }
 
@@ -30,6 +32,7 @@ class AppContainer(context: Context) {
     val photos = PhotoRepository(context)
     val thumbnails = ThumbnailLoader(context, engine, photos)
     val saveQueue = SaveQueue(appScope, engine, photos, settings)
+    val updates = UpdateManager(context, settings, appScope)
 }
 
 val Context.container: AppContainer

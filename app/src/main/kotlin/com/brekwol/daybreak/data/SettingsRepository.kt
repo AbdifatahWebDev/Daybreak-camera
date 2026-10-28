@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.brekwol.daybreak.engine.EncodeSettings
 import java.io.IOException
@@ -22,6 +23,14 @@ data class DaybreakSettings(
     val effort: Int = 7,
     val lossless: Boolean = false,
     val grid: Boolean = true,
+    /** Look for a new version on GitHub once a day (GitHub builds only). */
+    val updateAutoCheck: Boolean = true,
+    /** Download a new version in the background when on Wi-Fi. */
+    val updateAutoDownload: Boolean = true,
+    /** Also offer pre-releases (test builds). */
+    val updatePreReleases: Boolean = false,
+    /** When the last update check succeeded, in epoch milliseconds. */
+    val lastUpdateCheck: Long = 0L,
 ) {
     val encodeSettings: EncodeSettings
         get() = EncodeSettings(quality = quality, effort = effort, lossless = lossless)
@@ -35,6 +44,10 @@ class SettingsRepository(context: Context) {
         val effort = intPreferencesKey("jxl_effort")
         val lossless = booleanPreferencesKey("jxl_lossless")
         val grid = booleanPreferencesKey("grid")
+        val updateAutoCheck = booleanPreferencesKey("update_auto_check")
+        val updateAutoDownload = booleanPreferencesKey("update_auto_download")
+        val updatePreReleases = booleanPreferencesKey("update_pre_releases")
+        val lastUpdateCheck = longPreferencesKey("update_last_check")
     }
 
     val settings: Flow<DaybreakSettings> = store.data
@@ -45,6 +58,10 @@ class SettingsRepository(context: Context) {
                 effort = prefs[Keys.effort] ?: 7,
                 lossless = prefs[Keys.lossless] ?: false,
                 grid = prefs[Keys.grid] ?: true,
+                updateAutoCheck = prefs[Keys.updateAutoCheck] ?: true,
+                updateAutoDownload = prefs[Keys.updateAutoDownload] ?: true,
+                updatePreReleases = prefs[Keys.updatePreReleases] ?: false,
+                lastUpdateCheck = prefs[Keys.lastUpdateCheck] ?: 0L,
             )
         }
 
@@ -64,5 +81,21 @@ class SettingsRepository(context: Context) {
 
     suspend fun setGrid(value: Boolean) {
         store.edit { it[Keys.grid] = value }
+    }
+
+    suspend fun setUpdateAutoCheck(value: Boolean) {
+        store.edit { it[Keys.updateAutoCheck] = value }
+    }
+
+    suspend fun setUpdateAutoDownload(value: Boolean) {
+        store.edit { it[Keys.updateAutoDownload] = value }
+    }
+
+    suspend fun setUpdatePreReleases(value: Boolean) {
+        store.edit { it[Keys.updatePreReleases] = value }
+    }
+
+    suspend fun setLastUpdateCheck(value: Long) {
+        store.edit { it[Keys.lastUpdateCheck] = value }
     }
 }
