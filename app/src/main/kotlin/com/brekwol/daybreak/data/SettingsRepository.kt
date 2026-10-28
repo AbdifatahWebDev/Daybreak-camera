@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.brekwol.daybreak.engine.EncodeSettings
 import java.io.IOException
@@ -31,6 +32,10 @@ data class DaybreakSettings(
     val updatePreReleases: Boolean = false,
     /** When the last update check succeeded, in epoch milliseconds. */
     val lastUpdateCheck: Long = 0L,
+    /** Newest version the last successful check found. */
+    val latestSeenVersion: String = "",
+    /** Version that ran last time, to notice that an update was installed. */
+    val lastRunVersion: String = "",
 ) {
     val encodeSettings: EncodeSettings
         get() = EncodeSettings(quality = quality, effort = effort, lossless = lossless)
@@ -48,6 +53,8 @@ class SettingsRepository(context: Context) {
         val updateAutoDownload = booleanPreferencesKey("update_auto_download")
         val updatePreReleases = booleanPreferencesKey("update_pre_releases")
         val lastUpdateCheck = longPreferencesKey("update_last_check")
+        val latestSeenVersion = stringPreferencesKey("update_latest_seen")
+        val lastRunVersion = stringPreferencesKey("last_run_version")
     }
 
     val settings: Flow<DaybreakSettings> = store.data
@@ -62,6 +69,8 @@ class SettingsRepository(context: Context) {
                 updateAutoDownload = prefs[Keys.updateAutoDownload] ?: true,
                 updatePreReleases = prefs[Keys.updatePreReleases] ?: false,
                 lastUpdateCheck = prefs[Keys.lastUpdateCheck] ?: 0L,
+                latestSeenVersion = prefs[Keys.latestSeenVersion] ?: "",
+                lastRunVersion = prefs[Keys.lastRunVersion] ?: "",
             )
         }
 
@@ -95,7 +104,15 @@ class SettingsRepository(context: Context) {
         store.edit { it[Keys.updatePreReleases] = value }
     }
 
-    suspend fun setLastUpdateCheck(value: Long) {
-        store.edit { it[Keys.lastUpdateCheck] = value }
+    /** Records a successful update check and the newest version it found. */
+    suspend fun setUpdateChecked(time: Long, latestVersion: String) {
+        store.edit {
+            it[Keys.lastUpdateCheck] = time
+            it[Keys.latestSeenVersion] = latestVersion
+        }
+    }
+
+    suspend fun setLastRunVersion(value: String) {
+        store.edit { it[Keys.lastRunVersion] = value }
     }
 }

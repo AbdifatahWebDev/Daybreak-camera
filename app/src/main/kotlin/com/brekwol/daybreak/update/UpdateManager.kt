@@ -51,7 +51,8 @@ data class Release(
 sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
-    data class UpToDate(val checkedAt: Long) : UpdateState
+    /** [justUpdated] is true on the first start after this version was installed. */
+    data class UpToDate(val checkedAt: Long, val justUpdated: Boolean = false) : UpdateState
     /** Found, not downloaded yet (automatic downloads wait for Wi-Fi). */
     data class Available(val release: Release) : UpdateState
     /** [progress] is 0..1, or -1 when the size is unknown. */
@@ -95,14 +96,26 @@ class UpdateManager(
     private val dir = File(this.context.cacheDir, "updates")
     private val busy = Mutex()
 
-    /** Called once per app start. Checks at most once a day, if the user allows it. */
+    /**
+     * Called once per app start. Shows the result of the last check straight away,
+     * then checks GitHub at most once a day (sooner if an update is waiting).
+     */
     fun onAppStart() {
         if (!enabled) return
         scope.launch(Dispatchers.IO) {
             removeOldDownloads()
             val prefs = settings.current()
+            val previousRun = Version.parse(prefs.lastRunVersion)
+            val justUpdated = previousRun != null && previousRun < current
+            if (prefs.lastRunVersion != currentVersion) settings.setLastRunVersion(currentVersion)
+
+            val latestSeen = Version.parse(prefs.latestSeenVersion)
+            if (prefs.lastUpdateCheck > 0 && latestSeen != null && latestSeen <= current) {
+                _state.compareAndSet(UpdateState.Idle, UpdateState.UpToDate(prefs.lastUpdateCheck, justUpdated))
+            }
             val due = System.currentTimeMillis() - prefs.lastUpdateCheck >= CHECK_INTERVAL_MS
-            if (prefs.updateAutoCheck && due) checkAndMaybeDownload(manual = false)
+            val updateWaiting = latestSeen != null && latestSeen > current
+            if (prefs.updateAutoCheck && (due || updateWaiting)) checkAndMaybeDownload(manual = false)
         }
     }
 
@@ -177,7 +190,7 @@ class UpdateManager(
             return@withLock
         }
         val checkedAt = System.currentTimeMillis()
-        settings.setLastUpdateCheck(checkedAt)
+        settings.setUpdateChecked(checkedAt, (newest?.version ?: current).toString())
         if (manual) holdChecking(started)
         if (newest == null || newest.version <= current) {
             _state.value = UpdateState.UpToDate(checkedAt)

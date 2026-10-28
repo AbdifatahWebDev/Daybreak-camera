@@ -340,7 +340,7 @@ private fun UpdateStatus(
             checking = true
         }
         is UpdateState.UpToDate -> {
-            title = "You're up to date"
+            title = if (state.justUpdated) "Updated to Daybreak $currentVersion" else "You're up to date"
             detail = "Daybreak $currentVersion is the latest version · checked ${checkedAgo(state.checkedAt)}"
             action = "Check again" to onCheck
             upToDate = true
