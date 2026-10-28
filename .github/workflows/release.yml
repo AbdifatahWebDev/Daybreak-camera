@@ -111,7 +111,7 @@ jobs:
           DAYBREAK_KEY_PASSWORD: ${{ secrets.DAYBREAK_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace assembleGithubRelease testGithubReleaseUnitTest \
+          ./gradlew --no-daemon --stacktrace assembleGithubRelease testGithubDebugUnitTest \
             -PdaybreakVersionName="${{ steps.version.outputs.name }}" \
             -PdaybreakVersionCode="${{ steps.version.outputs.code }}" 2>&1 | tee build.log
 
