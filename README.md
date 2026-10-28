@@ -17,18 +17,21 @@
 
 ---
 
-> **Status:** v0.1 "First light", the first test release: photo capture, JPEG XL saving, library, viewer, settings and in-app updates. See the [roadmap](#roadmap).
+> **Status:** v0.2 "Pro": manual controls, HEIC, RAW + DNG, histogram and level, on top of v0.1's capture, JPEG XL saving, library and in-app updates. See the [roadmap](#roadmap).
 
-## What works in v0.1
+## What works in v0.2
 
 - Photo capture with tap to focus, pinch or tap zoom, grid, front and back camera
-- Every photo saved as **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) in `DCIM/Daybreak`
+- **Pro mode**: manual ISO, shutter speed (1/8000 s to 30 s where the sensor allows), focus distance, white balance presets and exposure compensation, with live readouts of what auto exposure chose
+- Photos saved as **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) or **HEIC** (hardware HEVC encoder) in `DCIM/Daybreak`
+- **RAW + DNG** on cameras that support it: the DNG sits next to the photo and the library shows them as one
+- Live **histogram** and a **level** that turns gold when the phone is straight
 - The shutter never waits: photos encode in the background while you keep shooting
 - Library grid with fast cached thumbnails, full-screen viewer with zoom, photo info and delete
 - Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet
 - Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
-Not in v0.1 yet: manual controls, RAW, HEIC, the editor and the other modes. They follow the roadmap.
+Not in yet: the editor, HDR and Night, video and the other modes. They follow the roadmap.
 
 ## Why Daybreak
 
@@ -132,7 +135,7 @@ More modules (camera, editor, and so on) split out as the app grows.
 | --- | --- |
 | v0.1 First light | Photo capture, JPEG XL saving, library grid and viewer |
 | v0.1.1 | In-app updates from GitHub Releases |
-| v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level |
+| v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level (done) |
 | v0.3 Editor | Vulkan editor: Light, Color, Curves, Detail, Crop, presets, share sheet |
 | v0.4 Modes | HDR, Night, Portrait, Scan, video recording and trim |
 | v0.5 Library+ | Albums, search, multi-select, masks, landscape and tablet layouts |

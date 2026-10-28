@@ -57,4 +57,10 @@ class DaybreakEngine {
     }
 
     val libjxlVersion: String by lazy { NativeEngine.libjxlVersion() }
+
+    /**
+     * The EXIF metadata of a camera JPEG as an `Exif\0\0` + TIFF block, with the
+     * orientation reset to normal (for formats that store rotation separately, like HEIC).
+     */
+    fun exifBlock(jpeg: ByteArray): ByteArray? = NativeEngine.exifBlock(jpeg)
 }

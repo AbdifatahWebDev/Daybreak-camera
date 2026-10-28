@@ -112,6 +112,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.heifwriter)
 
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)

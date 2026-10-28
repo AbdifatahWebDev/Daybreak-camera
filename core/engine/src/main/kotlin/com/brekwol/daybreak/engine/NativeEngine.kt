@@ -25,4 +25,6 @@ internal object NativeEngine {
     external fun readSize(data: ByteArray): IntArray
 
     external fun libjxlVersion(): String
+
+    external fun exifBlock(jpeg: ByteArray): ByteArray?
 }

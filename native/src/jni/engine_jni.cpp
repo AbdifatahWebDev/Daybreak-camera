@@ -158,3 +158,16 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_brekwol_daybreak_engine_NativeEngine_libjxlVersion(JNIEnv* env, jobject /* this */) {
   return env->NewStringUTF(daybreak::libjxl_version().c_str());
 }
+
+// EXIF from a camera JPEG as an "Exif\0\0" + TIFF block with Orientation set to 1,
+// for containers that store rotation separately (HEIC). Null when there is none.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_exifBlock(JNIEnv* env, jobject /* this */,
+                                                        jbyteArray jpeg) {
+  if (jpeg == nullptr) return nullptr;
+  std::vector<std::uint8_t> tiff = daybreak::exif_tiff_from_jpeg(to_vector(env, jpeg));
+  if (tiff.empty() || !daybreak::normalize_exif_orientation(tiff)) return nullptr;
+  std::vector<std::uint8_t> block = {'E', 'x', 'i', 'f', 0, 0};
+  block.insert(block.end(), tiff.begin(), tiff.end());
+  return to_java(env, block);
+}

@@ -20,6 +20,12 @@ import kotlinx.coroutines.flow.map
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 data class DaybreakSettings(
+    /** JPEG XL or HEIC. */
+    val format: PhotoFormat = PhotoFormat.Jxl,
+    /** Also save a DNG with each photo, on cameras that support RAW. */
+    val raw: Boolean = false,
+    val histogram: Boolean = true,
+    val level: Boolean = true,
     val quality: Int = 90,
     val effort: Int = 7,
     val lossless: Boolean = false,
@@ -45,6 +51,10 @@ class SettingsRepository(context: Context) {
     private val store = context.applicationContext.dataStore
 
     private object Keys {
+        val format = stringPreferencesKey("save_format")
+        val raw = booleanPreferencesKey("raw")
+        val histogram = booleanPreferencesKey("histogram")
+        val level = booleanPreferencesKey("level")
         val quality = intPreferencesKey("jxl_quality")
         val effort = intPreferencesKey("jxl_effort")
         val lossless = booleanPreferencesKey("jxl_lossless")
@@ -61,6 +71,10 @@ class SettingsRepository(context: Context) {
         .catch { error -> if (error is IOException) emit(emptyPreferences()) else throw error }
         .map { prefs ->
             DaybreakSettings(
+                format = PhotoFormat.fromKey(prefs[Keys.format]),
+                raw = prefs[Keys.raw] ?: false,
+                histogram = prefs[Keys.histogram] ?: true,
+                level = prefs[Keys.level] ?: true,
                 quality = prefs[Keys.quality] ?: 90,
                 effort = prefs[Keys.effort] ?: 7,
                 lossless = prefs[Keys.lossless] ?: false,
@@ -75,6 +89,22 @@ class SettingsRepository(context: Context) {
         }
 
     suspend fun current(): DaybreakSettings = settings.first()
+
+    suspend fun setFormat(value: PhotoFormat) {
+        store.edit { it[Keys.format] = value.extension }
+    }
+
+    suspend fun setRaw(value: Boolean) {
+        store.edit { it[Keys.raw] = value }
+    }
+
+    suspend fun setHistogram(value: Boolean) {
+        store.edit { it[Keys.histogram] = value }
+    }
+
+    suspend fun setLevel(value: Boolean) {
+        store.edit { it[Keys.level] = value }
+    }
 
     suspend fun setQuality(value: Int) {
         store.edit { it[Keys.quality] = value.coerceIn(50, 100) }

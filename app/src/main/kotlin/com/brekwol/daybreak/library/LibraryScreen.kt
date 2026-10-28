@@ -184,7 +184,7 @@ private fun PhotoTile(photo: Photo, onClick: () -> Unit) {
                 .background(Color(0x9E050505))
                 .padding(horizontal = 5.dp, vertical = 2.dp),
         ) {
-            Text("JXL", style = Daybreak.type.readout, color = Color(0xFFF4EFE6))
+            Text(photo.badge, style = Daybreak.type.readout, color = Color(0xFFF4EFE6))
         }
     }
 }

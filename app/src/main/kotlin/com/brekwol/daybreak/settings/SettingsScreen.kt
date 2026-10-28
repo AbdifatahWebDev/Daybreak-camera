@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.brekwol.daybreak.BuildConfig
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DaybreakSettings
+import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakChip
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
@@ -91,46 +92,21 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("Settings", style = Daybreak.type.title, color = colors.ink)
         }
 
+        val heicSupported = container.heic.isSupported
+        val jxl = settings.format == PhotoFormat.Jxl || !heicSupported
+        val lossless = jxl && settings.lossless
         Section("PHOTO") {
-            ValueRow("Save format", "JPEG XL")
-            Divider()
-            SwitchRow(
-                label = "Lossless",
-                description = "Bit-exact pixels. Larger files.",
-                checked = settings.lossless,
-                onChange = { scope.launch { container.settings.setLossless(it) } },
-            )
-            Divider()
             Column(Modifier.padding(vertical = 12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Quality",
-                        style = Daybreak.type.body,
-                        color = if (settings.lossless) colors.inkMuted else colors.ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = if (settings.lossless) "Lossless" else qualityLabel(quality.roundToInt()),
-                        style = Daybreak.type.readout,
-                        color = if (settings.lossless) colors.inkMuted else colors.sun,
-                    )
-                }
-                Slider(
-                    value = quality,
-                    onValueChange = { quality = it },
-                    onValueChangeFinished = { scope.launch { container.settings.setQuality(quality.roundToInt()) } },
-                    valueRange = 50f..100f,
-                    enabled = !settings.lossless,
-                    colors = SliderDefaults.colors(
-                        thumbColor = colors.ink,
-                        activeTrackColor = colors.sun,
-                        inactiveTrackColor = colors.line,
-                    ),
+                Text("Save format", style = Daybreak.type.body, color = colors.ink)
+                Text(
+                    text = when {
+                        !heicSupported -> "This phone has no HEVC encoder, so photos are saved as JPEG XL."
+                        jxl -> "JPEG XL: smallest files, lossless option. Fewer apps open it yet."
+                        else -> "HEIC: encoded by the phone's hardware. Most galleries open it."
+                    },
+                    style = Daybreak.type.caption,
+                    color = colors.inkMuted,
                 )
-            }
-            Divider()
-            Column(Modifier.padding(vertical = 12.dp)) {
-                Text("Encode effort", style = Daybreak.type.body, color = colors.ink)
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier
@@ -139,21 +115,90 @@ fun SettingsScreen(onBack: () -> Unit) {
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    listOf("Fast" to 3, "Balanced" to 7, "Smallest" to 9).forEach { (label, value) ->
-                        DaybreakChip(
-                            text = label,
-                            selected = settings.effort == value,
-                            onClick = { scope.launch { container.settings.setEffort(value) } },
-                        )
+                    PhotoFormat.processed.forEach { format ->
+                        if (format == PhotoFormat.Jxl || heicSupported) {
+                            DaybreakChip(
+                                text = format.label,
+                                selected = if (format == PhotoFormat.Jxl) jxl else !jxl,
+                                onClick = { scope.launch { container.settings.setFormat(format) } },
+                            )
+                        }
                     }
                 }
             }
             Divider()
+            if (jxl) {
+                SwitchRow(
+                    label = "Lossless",
+                    description = "Bit-exact pixels. Larger files.",
+                    checked = settings.lossless,
+                    onChange = { scope.launch { container.settings.setLossless(it) } },
+                )
+                Divider()
+            }
+            Column(Modifier.padding(vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Quality",
+                        style = Daybreak.type.body,
+                        color = if (lossless) colors.inkMuted else colors.ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = if (lossless) "Lossless" else qualityLabel(quality.roundToInt()),
+                        style = Daybreak.type.readout,
+                        color = if (lossless) colors.inkMuted else colors.sun,
+                    )
+                }
+                Slider(
+                    value = quality,
+                    onValueChange = { quality = it },
+                    onValueChangeFinished = { scope.launch { container.settings.setQuality(quality.roundToInt()) } },
+                    valueRange = 50f..100f,
+                    enabled = !lossless,
+                    colors = SliderDefaults.colors(
+                        thumbColor = colors.ink,
+                        activeTrackColor = colors.sun,
+                        inactiveTrackColor = colors.line,
+                    ),
+                )
+            }
+            if (jxl) {
+                Divider()
+                EffortRow(
+                    effort = settings.effort,
+                    onEffort = { value -> scope.launch { container.settings.setEffort(value) } },
+                )
+            }
+            Divider()
+            SwitchRow(
+                label = "RAW (DNG)",
+                description = "Also save the sensor data as a DNG, on cameras that support it. Large files.",
+                checked = settings.raw,
+                onChange = { scope.launch { container.settings.setRaw(it) } },
+            )
+        }
+
+        Section("VIEWFINDER") {
             SwitchRow(
                 label = "Grid",
-                description = "Rule-of-thirds lines on the viewfinder.",
+                description = "Rule-of-thirds lines.",
                 checked = settings.grid,
                 onChange = { scope.launch { container.settings.setGrid(it) } },
+            )
+            Divider()
+            SwitchRow(
+                label = "Histogram",
+                description = "Live brightness graph in the corner.",
+                checked = settings.histogram,
+                onChange = { scope.launch { container.settings.setHistogram(it) } },
+            )
+            Divider()
+            SwitchRow(
+                label = "Level",
+                description = "A horizon line that turns gold when the phone is straight.",
+                checked = settings.level,
+                onChange = { scope.launch { container.settings.setLevel(it) } },
             )
         }
 
@@ -467,4 +512,28 @@ private fun formatSize(bytes: Long): String = when {
     bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
     bytes >= 1_000 -> String.format(Locale.US, "%d KB", bytes / 1_000)
     else -> "$bytes B"
+}
+
+@Composable
+private fun EffortRow(effort: Int, onEffort: (Int) -> Unit) {
+    val colors = Daybreak.colors
+    Column(Modifier.padding(vertical = 12.dp)) {
+        Text("Encode effort", style = Daybreak.type.body, color = colors.ink)
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.surface200)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            listOf("Fast" to 3, "Balanced" to 7, "Smallest" to 9).forEach { (label, value) ->
+                DaybreakChip(
+                    text = label,
+                    selected = effort == value,
+                    onClick = { onEffort(value) },
+                )
+            }
+        }
+    }
 }

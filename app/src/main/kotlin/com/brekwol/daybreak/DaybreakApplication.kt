@@ -2,6 +2,8 @@ package com.brekwol.daybreak
 
 import android.app.Application
 import android.content.Context
+import com.brekwol.daybreak.data.HeicEncoder
+import com.brekwol.daybreak.data.PhotoDecoder
 import com.brekwol.daybreak.data.PhotoRepository
 import com.brekwol.daybreak.data.SaveQueue
 import com.brekwol.daybreak.data.SettingsRepository
@@ -30,8 +32,10 @@ class AppContainer(context: Context) {
     val engine = DaybreakEngine()
     val settings = SettingsRepository(context)
     val photos = PhotoRepository(context)
-    val thumbnails = ThumbnailLoader(context, engine, photos)
-    val saveQueue = SaveQueue(appScope, engine, photos, settings)
+    val heic = HeicEncoder(context)
+    val decoder = PhotoDecoder(context, engine, photos)
+    val thumbnails = ThumbnailLoader(context, decoder)
+    val saveQueue = SaveQueue(appScope, engine, heic, photos, settings)
     val updates = UpdateManager(context, settings, appScope)
 }
 

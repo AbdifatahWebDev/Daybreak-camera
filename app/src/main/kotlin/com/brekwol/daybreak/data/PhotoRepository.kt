@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 
-/** A JPEG XL photo saved by Daybreak. */
+/** A photo saved by Daybreak. A photo taken with RAW on carries its DNG in [raw]. */
 data class Photo(
     val id: Long,
     val uri: Uri,
@@ -28,7 +28,17 @@ data class Photo(
     val dateAddedSeconds: Long,
     val width: Int,
     val height: Int,
-)
+    val format: PhotoFormat,
+    val raw: Photo? = null,
+) {
+    /** File name without the extension; a photo and its DNG share it. */
+    val stem: String
+        get() = name.substringBeforeLast('.')
+
+    /** "JXL", "HEIC", "RAW" or "JXL+RAW". */
+    val badge: String
+        get() = if (raw != null) "${format.badge}+RAW" else format.badge
+}
 
 sealed interface DeleteResult {
     data object Deleted : DeleteResult
@@ -40,8 +50,7 @@ sealed interface DeleteResult {
 /**
  * Reads and writes Daybreak's photos in MediaStore under DCIM/Daybreak.
  * Files are inserted as pending and published only when fully written.
- * If a phone's MediaStore refuses the image/jxl type in DCIM, photos go to
- * Download/Daybreak instead.
+ * If a phone's MediaStore refuses a type in DCIM, photos go to Download/Daybreak.
  */
 class PhotoRepository(context: Context) {
     private val resolver = context.applicationContext.contentResolver
@@ -50,14 +59,33 @@ class PhotoRepository(context: Context) {
     /** Increments whenever photos are added or removed. */
     val changes: StateFlow<Int> = _changes.asStateFlow()
 
-    private val images = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+    /** MediaStore collection for images, used for DNGs written by the camera. */
+    val imagesCollection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
     private val downloads = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
-    suspend fun save(bytes: ByteArray, width: Int, height: Int): Photo = withContext(Dispatchers.IO) {
+    /** A new file name stem like DB_20261028_221400_123, shared by a photo and its DNG. */
+    fun newStem(): String =
+        "DB_" + SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+
+    /** MediaStore values for a DNG the camera writes itself. */
+    fun rawValues(stem: String): ContentValues = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, "$stem.${PhotoFormat.Dng.extension}")
+        put(MediaStore.MediaColumns.MIME_TYPE, PhotoFormat.Dng.mime)
+        put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_PATH)
+        put(MediaStore.MediaColumns.DATE_TAKEN, System.currentTimeMillis())
+    }
+
+    suspend fun save(
+        bytes: ByteArray,
+        stem: String,
+        format: PhotoFormat,
+        width: Int,
+        height: Int,
+    ): Photo = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        val name = "DB_" + SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date(now)) + ".jxl"
-        val target = insertPending(images, "DCIM/Daybreak", name, now, width, height)
-            ?: insertPending(downloads, "Download/Daybreak", name, now, width, height)
+        val name = "$stem.${format.extension}"
+        val target = insertPending(imagesCollection, RELATIVE_PATH, name, format.mime, now, width, height)
+            ?: insertPending(downloads, "Download/Daybreak", name, format.mime, now, width, height)
             ?: throw IOException("Android refused to create the photo file")
         val (collection, uri) = target
         try {
@@ -68,7 +96,7 @@ class PhotoRepository(context: Context) {
             runCatching { resolver.delete(uri, null, null) }
             throw error
         }
-        _changes.update { it + 1 }
+        notifyChanged()
         Photo(
             id = ContentUris.parseId(uri),
             uri = ContentUris.withAppendedId(collection, ContentUris.parseId(uri)),
@@ -77,6 +105,7 @@ class PhotoRepository(context: Context) {
             dateAddedSeconds = now / 1000,
             width = width,
             height = height,
+            format = format,
         )
     }
 
@@ -84,13 +113,14 @@ class PhotoRepository(context: Context) {
         collection: Uri,
         relativePath: String,
         name: String,
+        mime: String,
         now: Long,
         width: Int,
         height: Int,
     ): Pair<Uri, Uri>? {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, JXL_MIME)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
             put(MediaStore.MediaColumns.DATE_TAKEN, now)
@@ -106,10 +136,19 @@ class PhotoRepository(context: Context) {
         }
     }
 
-    /** All Daybreak photos, newest first. */
+    /** All Daybreak photos, newest first, with each DNG attached to its photo. */
     suspend fun list(): List<Photo> = withContext(Dispatchers.IO) {
-        (query(images) + query(downloads))
-            .distinctBy { it.uri }
+        val all = (query(imagesCollection) + query(downloads)).distinctBy { it.uri }
+        all.groupBy { it.stem }
+            .values
+            .mapNotNull { group ->
+                val dng = group.firstOrNull { it.format == PhotoFormat.Dng }
+                val processed = group.firstOrNull { it.format != PhotoFormat.Dng }
+                when {
+                    processed != null -> processed.copy(raw = dng)
+                    else -> dng
+                }
+            }
             .sortedByDescending { it.dateAddedSeconds }
     }
 
@@ -122,22 +161,27 @@ class PhotoRepository(context: Context) {
             MediaStore.MediaColumns.WIDTH,
             MediaStore.MediaColumns.HEIGHT,
         )
-        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"
-        val args = arrayOf("%Daybreak%", "%.jxl%")
+        val nameColumn = MediaStore.MediaColumns.DISPLAY_NAME
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND " +
+            "($nameColumn LIKE ? OR $nameColumn LIKE ? OR $nameColumn LIKE ?)"
+        val args = arrayOf("%Daybreak%", "%.jxl", "%.heic", "%.dng")
         val result = mutableListOf<Photo>()
         try {
             resolver.query(collection, projection, selection, args, "${MediaStore.MediaColumns.DATE_ADDED} DESC")
                 ?.use { cursor ->
                     while (cursor.moveToNext()) {
                         val id = cursor.getLong(0)
+                        val name = cursor.getString(1) ?: continue
+                        val format = PhotoFormat.fromFileName(name) ?: continue
                         result += Photo(
                             id = id,
                             uri = ContentUris.withAppendedId(collection, id),
-                            name = cursor.getString(1) ?: "photo.jxl",
+                            name = name,
                             sizeBytes = cursor.getLong(2),
                             dateAddedSeconds = cursor.getLong(3),
                             width = cursor.getInt(4),
                             height = cursor.getInt(5),
+                            format = format,
                         )
                     }
                 }
@@ -152,17 +196,17 @@ class PhotoRepository(context: Context) {
         stream.use { it.readBytes() }
     }
 
+    /** Deletes a photo and its DNG, if it has one. */
     suspend fun delete(photo: Photo): DeleteResult = withContext(Dispatchers.IO) {
+        val uris = listOfNotNull(photo.uri, photo.raw?.uri)
         try {
-            if (resolver.delete(photo.uri, null, null) > 0) {
-                _changes.update { it + 1 }
-                DeleteResult.Deleted
-            } else {
-                DeleteResult.Failed
-            }
+            var deleted = 0
+            for (uri in uris) deleted += resolver.delete(uri, null, null)
+            notifyChanged()
+            if (deleted > 0) DeleteResult.Deleted else DeleteResult.Failed
         } catch (error: SecurityException) {
             val sender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                MediaStore.createDeleteRequest(resolver, listOf(photo.uri)).intentSender
+                MediaStore.createDeleteRequest(resolver, uris).intentSender
             } else {
                 (error as? RecoverableSecurityException)?.userAction?.actionIntent?.intentSender
             }
@@ -170,12 +214,12 @@ class PhotoRepository(context: Context) {
         }
     }
 
-    /** Call after the user confirmed a system delete dialog. */
+    /** Call after photos changed outside this class (a system dialog, a DNG from the camera). */
     fun notifyChanged() {
         _changes.update { it + 1 }
     }
 
     companion object {
-        const val JXL_MIME = "image/jxl"
+        const val RELATIVE_PATH = "DCIM/Daybreak"
     }
 }

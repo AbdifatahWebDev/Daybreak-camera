@@ -87,8 +87,7 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
 
     val state by produceState<Loaded>(initialValue = Loaded.Loading, photo.uri) {
         value = try {
-            val bytes = container.photos.readBytes(photo.uri)
-            Loaded.Ready(container.engine.decodeJxl(bytes, maxDimension = 4096))
+            Loaded.Ready(container.decoder.decode(photo, maxDimension = 4096))
         } catch (error: Exception) {
             Loaded.Failed(error.message ?: "Could not open this photo")
         }
@@ -176,7 +175,7 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
                     )
                     Text(photo.name, style = Daybreak.type.caption, color = colors.inkMuted)
                 }
-                FormatBadge("JXL", formatSize(photo.sizeBytes))
+                FormatBadge(photo.badge, formatSize(photo.sizeBytes + (photo.raw?.sizeBytes ?: 0L)))
                 Spacer(Modifier.width(8.dp))
             }
 
@@ -220,7 +219,15 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Delete this photo?") },
-            text = { Text("It's removed from this phone. This can't be undone.") },
+            text = {
+                Text(
+                    if (photo.raw != null) {
+                        "The photo and its RAW file are removed from this phone. This can't be undone."
+                    } else {
+                        "It's removed from this phone. This can't be undone."
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
@@ -251,12 +258,14 @@ private fun InfoPanel(photo: Photo, state: Loaded) {
     val bitmap = (state as? Loaded.Ready)?.bitmap
     val width = if (photo.width > 0) photo.width else bitmap?.width ?: 0
     val height = if (photo.height > 0) photo.height else bitmap?.height ?: 0
-    val rows = listOf(
-        "Format" to "JPEG XL",
-        "Resolution" to if (width > 0) "$width × $height" else "—",
-        "File size" to formatSize(photo.sizeBytes),
-        "Saved in" to "DCIM/Daybreak",
-    )
+    val raw = photo.raw
+    val rows = buildList {
+        add("Format" to photo.format.label)
+        add("Resolution" to if (width > 0) "$width × $height" else "—")
+        add("File size" to formatSize(photo.sizeBytes))
+        if (raw != null) add("RAW" to "DNG · ${formatSize(raw.sizeBytes)}")
+        add("Saved in" to "DCIM/Daybreak")
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -314,14 +323,14 @@ private fun formatSize(bytes: Long): String = when {
 }
 
 /**
- * Many apps can't open JPEG XL yet, so sharing sends a temporary JPEG copy.
+ * Many apps can't open JPEG XL, HEIC or DNG, so sharing sends a temporary JPEG copy.
  * The copy lives in the app cache and never enters the photo library.
  */
 private suspend fun shareAsJpeg(context: Context, photo: Photo, preview: Bitmap) {
     val uri: Uri = withContext(Dispatchers.IO) {
         val container = context.container
         val full = try {
-            container.engine.decodeJxl(container.photos.readBytes(photo.uri), maxDimension = 0)
+            container.decoder.decode(photo, maxDimension = 0)
         } catch (ignored: OutOfMemoryError) {
             preview
         }

@@ -4,20 +4,11 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
 import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.ZoomState
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -26,6 +17,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,18 +42,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -71,12 +67,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Observer
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.brekwol.daybreak.camera.CameraSession
+import com.brekwol.daybreak.camera.ProSettings
 import com.brekwol.daybreak.container
-import com.brekwol.daybreak.data.CapturedFrame
 import com.brekwol.daybreak.data.DaybreakSettings
+import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakChip
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
@@ -84,7 +81,7 @@ import com.brekwol.daybreak.designsystem.FormatBadge
 import com.brekwol.daybreak.designsystem.R as DsR
 import com.brekwol.daybreak.designsystem.ShutterButton
 import com.brekwol.daybreak.update.UpdateState
-import java.util.concurrent.Executors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -144,44 +141,51 @@ private fun CameraContent(
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
 
-    val settings by container.settings.settings.collectAsStateWithLifecycle(initialValue = DaybreakSettings())
+    val loadedSettings by container.settings.settings.collectAsStateWithLifecycle(initialValue = null)
+    val settings = loadedSettings ?: DaybreakSettings()
     val pending by container.saveQueue.pending.collectAsStateWithLifecycle()
     val lastSaved by container.saveQueue.lastSaved.collectAsStateWithLifecycle()
     val update by container.updates.state.collectAsStateWithLifecycle()
     val updateWaiting = update is UpdateState.Available || update is UpdateState.Ready
 
-    val controller = remember {
-        LifecycleCameraController(context).apply {
-            setEnabledUseCases(CameraController.IMAGE_CAPTURE)
-            imageCaptureMode = ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
-        }
+    val session = remember { CameraSession(context) }
+    DisposableEffect(session) {
+        onDispose { session.release() }
     }
-    val frameExecutor = remember { Executors.newSingleThreadExecutor() }
-    DisposableEffect(lifecycleOwner) {
-        controller.bindToLifecycle(lifecycleOwner)
-        onDispose {
-            controller.unbind()
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose { frameExecutor.shutdown() }
+    val camera by session.state.collectAsStateWithLifecycle()
+    val live by session.live.collectAsStateWithLifecycle()
+    val histogram by session.histogram.collectAsStateWithLifecycle()
+    val previewView = remember {
+        PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
     }
 
-    var useBackCamera by remember { mutableStateOf(true) }
-    var zoomRatio by remember { mutableFloatStateOf(1f) }
-    var zoomOptions by remember { mutableStateOf(listOf(1f, 2f)) }
-    DisposableEffect(controller, lifecycleOwner) {
-        val observer = Observer<ZoomState> { state ->
-            zoomRatio = state.zoomRatio
-            zoomOptions = buildList {
-                if (state.minZoomRatio < 0.95f) add(state.minZoomRatio)
-                add(1f)
-                if (state.maxZoomRatio >= 2f) add(2f)
-                if (state.maxZoomRatio >= 5f) add(5f)
-            }
+    var backCamera by rememberSaveable { mutableStateOf(true) }
+    var mode by rememberSaveable { mutableStateOf(CaptureMode.Photo) }
+    var pro by remember { mutableStateOf(ProSettings()) }
+    var selectedControl by remember { mutableStateOf<ProControl?>(null) }
+    var focusPoint by remember { mutableStateOf<Offset?>(null) }
+
+    val settingsLoaded = loadedSettings != null
+    LaunchedEffect(settingsLoaded, backCamera, settings.raw, settings.histogram, lifecycleOwner) {
+        if (settingsLoaded) {
+            session.bind(
+                owner = lifecycleOwner,
+                surfaceProvider = previewView.surfaceProvider,
+                backCamera = backCamera,
+                raw = settings.raw,
+                histogram = settings.histogram,
+            )
         }
-        controller.zoomState.observe(lifecycleOwner, observer)
-        onDispose { controller.zoomState.removeObserver(observer) }
+    }
+    val effectivePro = if (mode == CaptureMode.Pro) pro else ProSettings()
+    LaunchedEffect(effectivePro, camera.ready) {
+        if (camera.ready) session.applyPro(effectivePro)
+    }
+    LaunchedEffect(focusPoint) {
+        if (focusPoint != null) {
+            delay(1200)
+            focusPoint = null
+        }
     }
 
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
@@ -195,6 +199,7 @@ private fun CameraContent(
         }
     }
 
+    val roll by rememberRoll(enabled = settings.level)
     val flash = remember { Animatable(0f) }
 
     fun capture() {
@@ -207,25 +212,13 @@ private fun CameraContent(
             flash.snapTo(0.7f)
             flash.animateTo(0f, tween(durationMillis = 180))
         }
-        controller.takePicture(
-            frameExecutor,
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val frame = try {
-                        image.toCapturedFrame()
-                    } catch (error: Exception) {
-                        container.saveQueue.reportError(error.message ?: "Could not read the camera frame")
-                        null
-                    } finally {
-                        image.close()
-                    }
-                    if (frame != null) container.saveQueue.submit(frame)
-                }
-
-                override fun onError(exception: ImageCaptureException) {
-                    container.saveQueue.reportError(exception.message ?: "The camera could not take the photo")
-                }
-            },
+        session.takePicture(
+            stem = container.photos.newStem(),
+            format = settings.format,
+            photos = container.photos,
+            deliverFrame = { frame -> container.saveQueue.submit(frame) },
+            rawSaved = { container.photos.notifyChanged() },
+            reportError = { message -> container.saveQueue.reportError(message) },
         )
     }
 
@@ -234,7 +227,7 @@ private fun CameraContent(
             .fillMaxSize()
             .safeDrawingPadding(),
     ) {
-        // Top bar: what the next file will be, grid, settings.
+        // Top bar: what the next file will be, RAW, grid, settings.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -242,13 +235,30 @@ private fun CameraContent(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val jxlLossless = settings.format == PhotoFormat.Jxl && settings.lossless
             FormatBadge(
-                format = "JXL",
-                detail = if (settings.lossless) "Lossless" else "Q${settings.quality}",
-                detailColor = if (settings.lossless) colors.focus else colors.inkMuted,
+                format = if (settings.format == PhotoFormat.Heic && !container.heic.isSupported) {
+                    PhotoFormat.Jxl.badge
+                } else {
+                    settings.format.badge
+                },
+                detail = if (jxlLossless) "Lossless" else "Q${settings.quality}",
+                detailColor = if (jxlLossless) colors.focus else colors.inkMuted,
                 onClick = onOpenSettings,
                 modifier = Modifier.padding(start = 8.dp),
             )
+            if (camera.capabilities.raw) {
+                Spacer(Modifier.width(6.dp))
+                DaybreakChip(
+                    text = "RAW",
+                    selected = settings.raw,
+                    mono = true,
+                    onClick = { scope.launch { container.settings.setRaw(!settings.raw) } },
+                    modifier = Modifier.semantics {
+                        contentDescription = if (settings.raw) "RAW on" else "RAW off"
+                    },
+                )
+            }
             Spacer(Modifier.weight(1f))
             DaybreakIconButton(
                 iconRes = DsR.drawable.ic_grid,
@@ -282,28 +292,78 @@ private fun CameraContent(
                 .aspectRatio(3f / 4f),
         ) {
             AndroidView(
-                factory = { viewContext ->
-                    PreviewView(viewContext).also { view ->
-                        view.scaleType = PreviewView.ScaleType.FILL_CENTER
-                        view.controller = controller
-                    }
-                },
+                factory = { previewView },
                 modifier = Modifier
                     .fillMaxSize()
                     .semantics { contentDescription = "Camera viewfinder" },
             )
-            if (settings.grid) ThirdsGrid(Modifier.fillMaxSize())
-            ZoomPill(
-                options = zoomOptions,
-                current = zoomRatio,
-                onSelect = { ratio ->
-                    zoomRatio = ratio
-                    controller.setZoomRatio(ratio)
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp),
+            // Tap to focus, pinch to zoom.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(session) {
+                        detectTapGestures { offset ->
+                            if (session.focusAt(previewView.meteringPointFactory, offset.x, offset.y)) {
+                                focusPoint = offset
+                            }
+                        }
+                    }
+                    .pointerInput(session) {
+                        detectTransformGestures { _, _, zoom, _ ->
+                            if (zoom != 1f) session.setZoom(session.state.value.zoomRatio * zoom)
+                        }
+                    },
             )
+            if (settings.grid) ThirdsGrid(Modifier.fillMaxSize())
+            val currentRoll = roll
+            if (settings.level && currentRoll != null) {
+                LevelOverlay(roll = currentRoll, levelColor = colors.sun, modifier = Modifier.fillMaxSize())
+            }
+            focusPoint?.let { point -> FocusRing(point, Modifier.fillMaxSize()) }
+            val bins = histogram
+            if (settings.histogram && bins != null) {
+                HistogramView(
+                    bins = bins,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(12.dp)
+                        .size(width = 112.dp, height = 56.dp),
+                )
+            }
+            camera.error?.let { message ->
+                Text(
+                    text = message,
+                    style = Daybreak.type.body,
+                    color = colors.ink,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(32.dp),
+                )
+            }
+
+            val control = selectedControl
+            if (mode == CaptureMode.Pro && control != null) {
+                ProDial(
+                    control = control,
+                    pro = pro,
+                    capabilities = camera.capabilities,
+                    live = live,
+                    onChange = { pro = it },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 12.dp),
+                )
+            } else {
+                ZoomPill(
+                    options = camera.zoomOptions,
+                    current = camera.zoomRatio,
+                    onSelect = { ratio -> session.setZoom(ratio) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp),
+                )
+            }
             Box(
                 Modifier
                     .fillMaxSize()
@@ -311,20 +371,26 @@ private fun CameraContent(
             )
         }
 
-        Spacer(Modifier.height(20.dp))
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("PHOTO", style = Daybreak.type.mode, color = colors.sun)
-            Spacer(Modifier.height(6.dp))
-            Box(
-                Modifier
-                    .size(4.dp)
-                    .clip(CircleShape)
-                    .background(colors.sun),
+        if (mode == CaptureMode.Pro) {
+            Spacer(Modifier.height(10.dp))
+            ProControlBar(
+                pro = pro,
+                capabilities = camera.capabilities,
+                live = live,
+                selected = selectedControl,
+                onSelect = { selectedControl = it },
+                modifier = Modifier.fillMaxWidth(),
             )
         }
+
+        Spacer(Modifier.height(10.dp))
+        ModeSwitcher(
+            mode = mode,
+            onMode = {
+                mode = it
+                selectedControl = null
+            },
+        )
 
         // Shutter row.
         Row(
@@ -336,22 +402,79 @@ private fun CameraContent(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             LastPhotoButton(thumbnail = thumbnail, pending = pending, onClick = onOpenLibrary)
-            ShutterButton(onClick = ::capture)
+            ShutterButton(onClick = ::capture, enabled = camera.ready)
             DaybreakIconButton(
                 iconRes = DsR.drawable.ic_flip,
-                contentDescription = if (useBackCamera) "Switch to front camera" else "Switch to back camera",
+                contentDescription = if (backCamera) "Switch to front camera" else "Switch to back camera",
                 background = colors.surface200,
                 size = 52.dp,
-                onClick = {
-                    val next = if (useBackCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                    // hasCamera() throws until the camera has finished starting.
-                    if (runCatching { controller.hasCamera(next) }.getOrDefault(false)) {
-                        controller.cameraSelector = next
-                        useBackCamera = !useBackCamera
-                    }
-                },
+                onClick = { backCamera = !backCamera },
             )
         }
+    }
+}
+
+@Composable
+private fun ModeSwitcher(mode: CaptureMode, onMode: (CaptureMode) -> Unit) {
+    val colors = Daybreak.colors
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        CaptureMode.entries.forEach { option ->
+            val selected = option == mode
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onMode(option) }
+                    .padding(horizontal = 18.dp, vertical = 6.dp)
+                    .semantics { contentDescription = "${option.label} mode" + if (selected) ", selected" else "" },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = option.label.uppercase(),
+                    style = Daybreak.type.mode,
+                    color = if (selected) colors.sun else colors.inkMuted,
+                )
+                Spacer(Modifier.height(5.dp))
+                Box(
+                    Modifier
+                        .size(4.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) colors.sun else Color.Transparent),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistogramView(bins: FloatArray, modifier: Modifier = Modifier) {
+    val colors = Daybreak.colors
+    Canvas(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.scrim)
+            .padding(horizontal = 6.dp, vertical = 5.dp)
+            .semantics { contentDescription = "Brightness histogram" },
+    ) {
+        if (bins.size < 2) return@Canvas
+        val step = size.width / (bins.size - 1)
+        val path = Path().apply {
+            moveTo(0f, size.height)
+            bins.forEachIndexed { index, value -> lineTo(index * step, size.height * (1f - value)) }
+            lineTo(size.width, size.height)
+            close()
+        }
+        drawPath(path, Color.White.copy(alpha = 0.6f))
+    }
+}
+
+@Composable
+private fun FocusRing(point: Offset, modifier: Modifier = Modifier) {
+    val color = Daybreak.colors.sun
+    Canvas(modifier) {
+        drawCircle(color, radius = 32.dp.toPx(), center = point, style = Stroke(width = 1.5.dp.toPx()))
     }
 }
 
@@ -541,34 +664,4 @@ private fun PermissionRequest(
             textAlign = TextAlign.Center,
         )
     }
-}
-
-/** Turns a CameraX in-memory capture into an ARGB bitmap plus its JPEG for EXIF. */
-private fun ImageProxy.toCapturedFrame(): CapturedFrame {
-    val rotation = imageInfo.rotationDegrees
-    val full = android.graphics.Rect(0, 0, width, height)
-    return if (format == ImageFormat.JPEG) {
-        val buffer = planes[0].buffer
-        buffer.rewind()
-        val jpeg = ByteArray(buffer.remaining())
-        buffer.get(jpeg)
-        val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
-        val decoded = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options)
-            ?: error("Could not read the camera frame")
-        CapturedFrame(decoded.cropTo(cropRect, full), rotation, jpeg)
-    } else {
-        CapturedFrame(toBitmap(), rotation, null)
-    }
-}
-
-private fun Bitmap.cropTo(crop: android.graphics.Rect, full: android.graphics.Rect): Bitmap {
-    if (crop == full || crop.isEmpty) return this
-    val left = crop.left.coerceIn(0, width - 1)
-    val top = crop.top.coerceIn(0, height - 1)
-    val w = crop.width().coerceAtMost(width - left)
-    val h = crop.height().coerceAtMost(height - top)
-    if (w <= 0 || h <= 0 || (w == width && h == height)) return this
-    val cropped = Bitmap.createBitmap(this, left, top, w, h)
-    if (cropped !== this) recycle()
-    return cropped
 }

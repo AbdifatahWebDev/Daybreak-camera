@@ -22,15 +22,20 @@ class CapturedFrame(
     val rotationDegrees: Int,
     /** The camera's JPEG, used only as the source of EXIF metadata. */
     val exifSourceJpeg: ByteArray?,
+    /** File name without extension, shared with the DNG when RAW is on. */
+    val stem: String,
+    /** JPEG XL or HEIC, as chosen when the shutter was pressed. */
+    val format: PhotoFormat,
 )
 
 /**
  * The shutter never waits for a file. Frames go into this queue and are encoded
- * to JPEG XL one at a time in the background.
+ * to JPEG XL or HEIC one at a time in the background.
  */
 class SaveQueue(
     private val scope: CoroutineScope,
     private val engine: DaybreakEngine,
+    private val heic: HeicEncoder,
     private val photos: PhotoRepository,
     private val settings: SettingsRepository,
 ) {
@@ -56,16 +61,29 @@ class SaveQueue(
             try {
                 encoder.withPermit {
                     val current = settings.current()
-                    val bytes = engine.encodeJxl(
-                        bitmap = frame.bitmap,
-                        rotationDegrees = frame.rotationDegrees,
-                        settings = current.encodeSettings,
-                        exifSourceJpeg = frame.exifSourceJpeg,
-                    )
+                    val format = if (frame.format == PhotoFormat.Heic && heic.isSupported) {
+                        PhotoFormat.Heic
+                    } else {
+                        PhotoFormat.Jxl
+                    }
+                    val bytes = when (format) {
+                        PhotoFormat.Heic -> heic.encode(
+                            bitmap = frame.bitmap,
+                            rotationDegrees = frame.rotationDegrees,
+                            quality = current.quality,
+                            exifBlock = frame.exifSourceJpeg?.let { engine.exifBlock(it) },
+                        )
+                        else -> engine.encodeJxl(
+                            bitmap = frame.bitmap,
+                            rotationDegrees = frame.rotationDegrees,
+                            settings = current.encodeSettings,
+                            exifSourceJpeg = frame.exifSourceJpeg,
+                        )
+                    }
                     val sideways = frame.rotationDegrees % 180 != 0
                     val width = if (sideways) frame.bitmap.height else frame.bitmap.width
                     val height = if (sideways) frame.bitmap.width else frame.bitmap.height
-                    _lastSaved.value = photos.save(bytes, width, height)
+                    _lastSaved.value = photos.save(bytes, frame.stem, format, width, height)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
