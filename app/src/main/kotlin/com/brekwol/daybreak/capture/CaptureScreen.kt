@@ -268,9 +268,9 @@ private fun CameraContent(
         ) {
             AndroidView(
                 factory = { viewContext ->
-                    PreviewView(viewContext).apply {
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                        this.controller = controller
+                    PreviewView(viewContext).also { view ->
+                        view.scaleType = PreviewView.ScaleType.FILL_CENTER
+                        view.controller = controller
                     }
                 },
                 modifier = Modifier
@@ -329,7 +329,8 @@ private fun CameraContent(
                 size = 52.dp,
                 onClick = {
                     val next = if (useBackCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                    if (controller.hasCamera(next)) {
+                    // hasCamera() throws until the camera has finished starting.
+                    if (runCatching { controller.hasCamera(next) }.getOrDefault(false)) {
                         controller.cameraSelector = next
                         useBackCamera = !useBackCamera
                     }
