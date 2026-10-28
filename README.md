@@ -129,12 +129,15 @@ More modules (camera, editor, and so on) split out as the app grows.
 
 ## Releases
 
-Pushing a version tag builds and publishes a release on GitHub Actions:
+The version lives in the `VERSION` file. Changing it on `main` builds the APK on GitHub Actions, then creates the tag and the GitHub release:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0        # release
-git tag v0.2.0-rc.1 && git push origin v0.2.0-rc.1   # pre-release
+echo 0.2.0-rc.1 > VERSION   # pre-release (any version with a suffix)
+echo 0.2.0 > VERSION        # release
+git commit -am "Daybreak 0.2.0" && git push
 ```
+
+Pushing a `v*` tag yourself works too.
 
 Releases are signed with the key stored in these repository secrets (Settings › Secrets and variables › Actions): `DAYBREAK_KEYSTORE_BASE64`, `DAYBREAK_KEYSTORE_PASSWORD`, `DAYBREAK_KEY_ALIAS`, `DAYBREAK_KEY_PASSWORD`. Without them the APK is signed with a temporary key and marked as a test build.
 
@@ -144,7 +147,7 @@ The **Checks** workflow (engine tests under sanitizers, debug build, unit tests)
 
 Daybreak is in early development, so please open an issue before starting a larger change. Bug reports with your phone model and Android version are very welcome.
 
-Builds run on GitHub Actions only for version tags and manual runs, not on every push.
+Builds run on GitHub Actions only when the version changes or when started by hand, not on every push.
 
 ## Privacy
 

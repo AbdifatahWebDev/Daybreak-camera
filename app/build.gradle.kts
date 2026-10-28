@@ -3,8 +3,14 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Versions come from the release tag in CI (-PdaybreakVersionName=0.1.0 -PdaybreakVersionCode=100).
-val daybreakVersionName = providers.gradleProperty("daybreakVersionName").getOrElse("0.1.0-dev")
+// CI passes the release version (-PdaybreakVersionName=0.1.0 -PdaybreakVersionCode=100).
+// Local builds use the VERSION file at the repository root.
+val daybreakVersionName: String = providers.gradleProperty("daybreakVersionName")
+    .orElse(
+        providers.fileContents(rootProject.layout.projectDirectory.file("VERSION"))
+            .asText.map { it.trim() + "-dev" },
+    )
+    .getOrElse("0.0.0-dev")
 val daybreakVersionCode = providers.gradleProperty("daybreakVersionCode").getOrElse("1").toInt()
 
 // Release signing comes from environment variables set by CI from repository secrets.

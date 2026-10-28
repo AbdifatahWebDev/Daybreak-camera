@@ -1,11 +1,17 @@
-# Builds the release APK. Runs only for version tags (v*) and manual runs,
-# never on ordinary pushes, to save Actions minutes.
-#   v0.1.0       -> GitHub release
-#   v0.1.0-rc.1  -> GitHub pre-release
+# Builds the release APK. To save Actions minutes it runs only when a new
+# version is set, never on ordinary pushes:
+#   - VERSION changes on main  -> builds, then creates the tag and the release
+#   - a v* tag is pushed       -> builds and releases that tag
+#   - started by hand          -> builds only (APK attached to the run)
+# A version with a suffix (0.2.0-rc.1) becomes a pre-release.
 name: Release
 
 on:
   push:
+    branches:
+      - main
+    paths:
+      - VERSION
     tags:
       - "v*"
   workflow_dispatch:
@@ -48,8 +54,14 @@ jobs:
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
             name="${GITHUB_REF_NAME#v}"
+          elif [[ -f VERSION ]]; then
+            name="$(tr -d '[:space:]' < VERSION)"
           else
             name="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          if [[ ! "$name" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$name' is not a version like 1.2.3 or 1.2.3-rc.1"
+            exit 1
           fi
           base="${name%%-*}"
           IFS=. read -r major minor patch <<< "$base"
@@ -104,9 +116,11 @@ jobs:
           path: dist/
 
       - name: Publish the GitHub release
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
           name: Daybreak ${{ steps.version.outputs.name }}
           prerelease: ${{ steps.version.outputs.prerelease }}
           files: dist/*
@@ -121,12 +135,14 @@ jobs:
       - name: Save the build log for review
         if: failure()
         shell: bash
+        env:
+          LOG_NAME: ${{ steps.version.outputs.name && format('v{0}', steps.version.outputs.name) || github.ref_name }}
         run: |
           log="build.log"
           [[ -f "$log" ]] || echo "The run failed before the Gradle build started." > "$log"
           git config user.name "Daybreak CI"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          dest="logs/${GITHUB_REF_NAME//\//_}-run${GITHUB_RUN_NUMBER}.log"
+          dest="logs/${LOG_NAME//\//_}-run${GITHUB_RUN_NUMBER}.log"
           tmp="$(mktemp -d)"
           if git ls-remote --exit-code --heads origin ci-logs > /dev/null 2>&1; then
             git fetch --depth=1 origin ci-logs
@@ -137,4 +153,4 @@ jobs:
           fi
           mkdir -p "$tmp/logs"
           tail -c 900000 "$log" > "$tmp/$dest"
-          (cd "$tmp" && git add "$dest" && git commit -m "CI log for $GITHUB_REF_NAME run $GITHUB_RUN_NUMBER" && git push origin HEAD:refs/heads/ci-logs)
+          (cd "$tmp" && git add "$dest" && git commit -m "CI log for $LOG_NAME run $GITHUB_RUN_NUMBER" && git push origin HEAD:refs/heads/ci-logs)
