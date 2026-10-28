@@ -19,10 +19,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -40,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.brekwol.daybreak.BuildConfig
@@ -154,6 +159,11 @@ fun SettingsScreen(onBack: () -> Unit) {
 
         if (container.updates.enabled) {
             val update by container.updates.state.collectAsStateWithLifecycle()
+            LaunchedEffect(Unit) {
+                container.updates.messages.collect { message ->
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+            }
             Section("UPDATES") {
                 UpdateStatus(
                     state = update,
@@ -316,19 +326,24 @@ private fun UpdateStatus(
     val title: String
     val detail: String
     var action: Pair<String, () -> Unit>? = "Check now" to onCheck
+    var checking = false
+    var upToDate = false
     when (state) {
         UpdateState.Idle -> {
             title = "Daybreak $currentVersion"
             detail = "Not checked yet"
         }
         UpdateState.Checking -> {
-            title = "Daybreak $currentVersion"
-            detail = "Checking GitHub…"
+            title = "Checking for updates…"
+            detail = "Asking GitHub for the newest version"
             action = null
+            checking = true
         }
         is UpdateState.UpToDate -> {
-            title = "Daybreak $currentVersion"
-            detail = "Up to date · checked ${checkedAgo(state.checkedAt)}"
+            title = "You're up to date"
+            detail = "Daybreak $currentVersion is the latest version · checked ${checkedAgo(state.checkedAt)}"
+            action = "Check again" to onCheck
+            upToDate = true
         }
         is UpdateState.Available -> {
             title = "Daybreak ${state.release.version} is out"
@@ -351,18 +366,43 @@ private fun UpdateStatus(
             action = null
         }
         is UpdateState.Failed -> {
-            title = if (state.reinstall) "Can't update this copy" else "Update failed"
+            title = when {
+                state.reinstall -> "Can't update this copy"
+                state.release == null -> "Couldn't check for updates"
+                else -> "Update failed"
+            }
             detail = state.message
             val page = state.release?.pageUrl
-            if (state.reinstall && page != null) action = "Open GitHub" to { onOpenPage(page) }
+            action = if (state.reinstall && page != null) "Open GitHub" to { onOpenPage(page) } else "Try again" to onCheck
         }
     }
 
     Column(Modifier.padding(vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(title, style = Daybreak.type.body, color = colors.ink)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (upToDate) {
+                        Icon(
+                            painter = painterResource(DsR.drawable.ic_check),
+                            contentDescription = null,
+                            tint = colors.sun,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(title, style = Daybreak.type.body, color = colors.ink)
+                }
                 Text(detail, style = Daybreak.type.caption, color = colors.inkMuted)
+            }
+            if (checking) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(start = 12.dp, end = 8.dp)
+                        .size(24.dp),
+                    color = colors.sun,
+                    trackColor = colors.line,
+                    strokeWidth = 2.5.dp,
+                )
             }
             action?.let { (label, onClick) ->
                 Box(

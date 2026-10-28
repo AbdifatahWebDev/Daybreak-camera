@@ -9,6 +9,7 @@ import android.content.pm.SigningInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.SystemClock
 import com.brekwol.daybreak.BuildConfig
 import com.brekwol.daybreak.data.SettingsRepository
 import java.io.File
@@ -23,9 +24,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -82,6 +87,10 @@ class UpdateManager(
 
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
+
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    /** One-line results of a "Check now" tap, shown as a toast. */
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     private val dir = File(this.context.cacheDir, "updates")
     private val busy = Mutex()
@@ -155,23 +164,35 @@ class UpdateManager(
         val now = _state.value
         if (now is UpdateState.Downloading || now is UpdateState.Installing) return@withLock
         _state.value = UpdateState.Checking
+        val started = SystemClock.elapsedRealtime()
         val prefs = settings.current()
         val newest = try {
             findNewestRelease(includePreReleases = prefs.updatePreReleases || current.isPreRelease)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            if (manual) holdChecking(started)
             _state.value = UpdateState.Failed(describe(error), null)
+            if (manual) _messages.tryEmit("Couldn't check for updates. ${describe(error)}")
             return@withLock
         }
         val checkedAt = System.currentTimeMillis()
         settings.setLastUpdateCheck(checkedAt)
+        if (manual) holdChecking(started)
         if (newest == null || newest.version <= current) {
             _state.value = UpdateState.UpToDate(checkedAt)
+            if (manual) _messages.tryEmit("You're up to date. Daybreak $currentVersion is the latest version.")
             return@withLock
         }
         _state.value = UpdateState.Available(newest)
+        if (manual) _messages.tryEmit("Daybreak ${newest.version} is out. Downloading it now.")
         if (manual || (prefs.updateAutoDownload && isOnUnmeteredNetwork())) downloadLocked(newest)
+    }
+
+    /** Keeps "Checking…" on screen long enough to see after a tap. */
+    private suspend fun holdChecking(started: Long) {
+        val remaining = MIN_CHECKING_MS - (SystemClock.elapsedRealtime() - started)
+        if (remaining > 0) delay(remaining)
     }
 
     private fun findNewestRelease(includePreReleases: Boolean): Release? {
@@ -371,6 +392,7 @@ class UpdateManager(
         private const val GITHUB_JSON = "application/vnd.github+json"
         private const val CHECK_INTERVAL_MS = 20L * 60 * 60 * 1000
         private const val PROGRESS_STEP_BYTES = 256L * 1024
+        private const val MIN_CHECKING_MS = 900L
 
         const val REINSTALL_MESSAGE =
             "This version is signed with a different key, so it can't replace the Daybreak you have. " +
