@@ -154,7 +154,7 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun PhotoTile(photo: Photo, onClick: () -> Unit) {
+internal fun PhotoTile(photo: Photo, onClick: () -> Unit) {
     val container = LocalContext.current.container
     val colors = Daybreak.colors
     val thumbnail by produceState<Bitmap?>(initialValue = null, photo.uri, photo.sizeBytes) {

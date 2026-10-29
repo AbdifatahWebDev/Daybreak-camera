@@ -21,7 +21,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 data class DaybreakSettings(
     /** JPEG XL or HEIC. */
-    val format: PhotoFormat = PhotoFormat.Jxl,
+    val format: PhotoFormat = PhotoFormat.Heic,
     /** Also save a DNG with each photo, on cameras that support RAW. */
     val raw: Boolean = false,
     val histogram: Boolean = true,
@@ -71,7 +71,9 @@ class SettingsRepository(context: Context) {
         .catch { error -> if (error is IOException) emit(emptyPreferences()) else throw error }
         .map { prefs ->
             DaybreakSettings(
-                format = PhotoFormat.fromKey(prefs[Keys.format]),
+                // HEIC unless chosen otherwise: it shows in every gallery. Phones
+                // without an HEVC encoder still save JPEG XL (see SaveQueue).
+                format = prefs[Keys.format]?.let { PhotoFormat.fromKey(it) } ?: PhotoFormat.Heic,
                 raw = prefs[Keys.raw] ?: false,
                 histogram = prefs[Keys.histogram] ?: true,
                 level = prefs[Keys.level] ?: true,

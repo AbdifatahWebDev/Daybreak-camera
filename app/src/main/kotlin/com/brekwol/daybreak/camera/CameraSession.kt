@@ -37,8 +37,6 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
-import androidx.camera.view.RotationProvider
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
@@ -91,7 +89,6 @@ class CameraSession(context: Context) {
     private val context = context.applicationContext
     private val resolver = this.context.contentResolver
     private val captureDir = File(this.context.cacheDir, "capture")
-    private val mainExecutor = ContextCompat.getMainExecutor(this.context)
     private val captureExecutor = Executors.newSingleThreadExecutor()
     private val analysisExecutor = Executors.newSingleThreadExecutor()
 
@@ -132,12 +129,12 @@ class CameraSession(context: Context) {
         }
     }
 
-    private val rotationProvider = RotationProvider(this.context)
-    private val rotationListener = RotationProvider.Listener { rotation ->
+    // Which way up each photo is saved. Keeps the last sure reading while the
+    // phone points at the sky or the floor.
+    private val orientation = OrientationTracker(this.context) { rotation ->
         targetRotation = rotation
         imageCapture?.setTargetRotation(rotation)
-    }
-    private val rotationListening = rotationProvider.addListener(mainExecutor, rotationListener)
+    }.also { it.start() }
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -392,7 +389,7 @@ class CameraSession(context: Context) {
 
     /** Closes the camera and stops background work. */
     fun release() {
-        rotationProvider.removeListener(rotationListener)
+        orientation.stop()
         zoomSource?.removeObserver(zoomObserver)
         imageAnalysis?.clearAnalyzer()
         runCatching { provider?.unbindAll() }
@@ -403,9 +400,9 @@ class CameraSession(context: Context) {
         analysisExecutor.shutdown()
     }
 
-    /** Whether rotation updates are arriving (false on devices without the sensor). */
+    /** Whether photos follow how the phone is held (false on phones without the sensor). */
     val followsRotation: Boolean
-        get() = rotationListening
+        get() = orientation.available
 
     private fun readCapabilities(info: CameraInfo, rawSupported: Boolean): CameraCapabilities {
         val camera2 = Camera2CameraInfo.from(info)

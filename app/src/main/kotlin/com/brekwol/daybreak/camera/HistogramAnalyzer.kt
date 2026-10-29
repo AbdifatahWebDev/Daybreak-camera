@@ -3,10 +3,11 @@ package com.brekwol.daybreak.camera
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import kotlin.math.sqrt
 
 /**
  * Builds a 64-bin brightness histogram from the luma plane of small preview
- * frames, about ten times a second. Bins are scaled so the tallest is 1.
+ * frames, about ten times a second. Bins are square-root scaled so the tallest is 1.
  */
 class HistogramAnalyzer(
     private val onHistogram: (FloatArray) -> Unit,
@@ -38,9 +39,12 @@ class HistogramAnalyzer(
                 }
                 y += SAMPLE_STEP
             }
+            // Square-root scale: a large black or white area would otherwise
+            // flatten every other tone to nothing.
             var tallest = 1
             for (count in bins) if (count > tallest) tallest = count
-            onHistogram(FloatArray(BINS) { bins[it].toFloat() / tallest })
+            val top = sqrt(tallest.toFloat())
+            onHistogram(FloatArray(BINS) { sqrt(bins[it].toFloat()) / top })
         } finally {
             image.close()
         }

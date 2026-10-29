@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="share" path="share/" />
+    <!-- JPEG copies for Share and for other apps picking a Daybreak photo. -->
+    <cache-path name="export" path="export/" />
 </paths>

@@ -201,11 +201,11 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
                         chooseShare = true
                         return@ActionButton
                     }
-                    val ready = state as? Loaded.Ready ?: return@ActionButton
+                    if (state !is Loaded.Ready) return@ActionButton
                     busy = true
                     scope.launch {
                         try {
-                            shareAsJpeg(context, photo, ready.bitmap)
+                            shareAsJpeg(context, photo)
                         } catch (error: Exception) {
                             Toast.makeText(context, error.message ?: "Could not share", Toast.LENGTH_LONG).show()
                         } finally {
@@ -241,12 +241,11 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
                     enabled = state is Loaded.Ready,
                     onClick = {
                         chooseShare = false
-                        val ready = state as? Loaded.Ready
-                        if (ready != null) {
+                        if (state is Loaded.Ready) {
                             busy = true
                             scope.launch {
                                 try {
-                                    shareAsJpeg(context, photo, ready.bitmap)
+                                    shareAsJpeg(context, photo)
                                 } catch (error: Exception) {
                                     Toast.makeText(context, error.message ?: "Could not share", Toast.LENGTH_LONG).show()
                                 } finally {
@@ -374,23 +373,9 @@ private fun formatSize(bytes: Long): String = when {
  * Many apps can't open JPEG XL, HEIC or DNG, so sharing sends a temporary JPEG copy.
  * The copy lives in the app cache and never enters the photo library.
  */
-private suspend fun shareAsJpeg(context: Context, photo: Photo, preview: Bitmap) {
-    val uri: Uri = withContext(Dispatchers.IO) {
-        val container = context.container
-        val full = try {
-            container.decoder.decode(photo, maxDimension = 0)
-        } catch (ignored: OutOfMemoryError) {
-            preview
-        }
-        val dir = File(context.cacheDir, "share").apply {
-            mkdirs()
-            listFiles()?.forEach { it.delete() }
-        }
-        val file = File(dir, photo.name.substringBeforeLast('.') + ".jpg")
-        file.outputStream().use { full.compress(Bitmap.CompressFormat.JPEG, 92, it) }
-        if (full !== preview) full.recycle()
-        FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    }
+private suspend fun shareAsJpeg(context: Context, photo: Photo) {
+    val file = context.container.exporter.export(photo)
+    val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "image/jpeg"
         putExtra(Intent.EXTRA_STREAM, uri)

@@ -23,12 +23,14 @@
 
 - Photo capture with tap to focus, pinch or tap zoom, grid, front and back camera
 - **Pro mode**: manual ISO, shutter speed (1/8000 s to 30 s where the sensor allows), focus distance, white balance presets and exposure compensation, with live readouts of what auto exposure chose
-- Photos saved as **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) or **HEIC** (hardware HEVC encoder) in `DCIM/Daybreak`
+- Photos saved as **HEIC** (hardware HEVC encoder, shows in every gallery; the default) or **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) in `DCIM/Daybreak`
 - **RAW + DNG** on cameras that support it: the DNG sits next to the photo and the library shows them as one
 - Live **histogram** and a **level** that turns gold when the phone is straight
 - The shutter never waits: photos encode in the background while you keep shooting
 - Library grid with fast cached thumbnails, full-screen viewer with zoom, photo info and delete
 - Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet; RAW photos can also share their DNG
+- **Pick Daybreak photos from other apps**: Daybreak appears in Android's file picker and in "choose a photo" requests, and the app receives a JPEG copy
+- Photos keep the right way up even when you point the phone at the sky or the floor
 - Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
 Not in yet: the editor, HDR and Night, video and the other modes. They follow the roadmap.
@@ -37,9 +39,9 @@ Not in yet: the editor, HDR and Night, video and the other modes. They follow th
 
 Phone cameras capture 10-bit color and HDR, then most apps throw it away by saving 8-bit JPEG. Daybreak keeps it:
 
-- **JPEG XL** by default: smaller than JPEG at the same quality, with a true lossless mode, 10/16-bit color and HDR.
-- **HEIC** on phones with a hardware HEVC encoder.
-- **No JPEG in your library.** When you share to an app that can't open JPEG XL, Daybreak makes a temporary JPEG or PNG copy for that share only.
+- **HEIC** by default on phones with a hardware HEVC encoder: half the size of JPEG, and every gallery shows it.
+- **JPEG XL** one tap away: smaller again at the same quality, with a true lossless mode, 10/16-bit color and HDR. Most gallery apps can't show it yet ([Fossify Gallery](https://github.com/FossifyOrg/Gallery) can), so Daybreak hands other apps a JPEG copy when they need one.
+- **No JPEG in your library.** Share and the file picker get a temporary JPEG copy for that one use only.
 - **Non-destructive editing.** Your original file is never changed.
 - **No account, no ads, no tracking.** Everything stays on your phone.
 

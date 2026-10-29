@@ -101,8 +101,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text(
                     text = when {
                         !heicSupported -> "This phone has no HEVC encoder, so photos are saved as JPEG XL."
-                        jxl -> "JPEG XL: smallest files, lossless option. Fewer apps open it yet."
-                        else -> "HEIC: encoded by the phone's hardware. Most galleries open it."
+                        jxl -> "JPEG XL: smallest files and best quality, with a lossless option. " +
+                            "Shows in Daybreak and a few galleries, like Fossify Gallery. Share sends a JPEG copy."
+                        else -> "HEIC: shows in your gallery and most apps. Encoded by the phone's hardware."
                     },
                     style = Daybreak.type.caption,
                     color = colors.inkMuted,
