@@ -27,4 +27,17 @@ internal object NativeEngine {
     external fun libjxlVersion(): String
 
     external fun exifBlock(jpeg: ByteArray): ByteArray?
+
+    /** Size of the edited image; see [EditRecipe.packParams] for the layout of [params]. */
+    external fun editOutputSize(width: Int, height: Int, params: FloatArray, applyCrop: Boolean): IntArray
+
+    /** Renders [source] through an edit into [destination]; both ARGB_8888. */
+    external fun renderEdit(
+        source: Bitmap,
+        destination: Bitmap,
+        params: FloatArray,
+        curves: FloatArray,
+        fullLongSide: Int,
+        applyCrop: Boolean,
+    )
 }

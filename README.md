@@ -17,9 +17,9 @@
 
 ---
 
-> **Status:** v0.2 "Pro": manual controls, HEIC, RAW + DNG, histogram and level, on top of v0.1's capture, JPEG XL saving, library and in-app updates. See the [roadmap](#roadmap).
+> **Status:** v0.3 "Editor": a non-destructive photo editor and a new share sheet, on top of v0.2's Pro controls and v0.1's capture, JPEG XL saving, library and in-app updates. See the [roadmap](#roadmap).
 
-## What works in v0.2
+## What works in v0.3
 
 - Photo capture with tap to focus, pinch or tap zoom, grid, front and back camera
 - **Pro mode**: manual ISO, shutter speed (1/8000 s to 30 s where the sensor allows), white balance presets and exposure compensation on ruler dials, with live readouts of what auto exposure chose, an exposure meter that balances manual ISO and shutter with one tap, and one-tap Auto
@@ -29,12 +29,15 @@
 - Live **histogram** and a **level** that turns gold when the phone is straight
 - The shutter never waits: photos encode in the background while you keep shooting
 - Library grid with fast cached thumbnails, full-screen viewer with zoom, photo info and delete
-- Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet; RAW photos can also share their DNG
+- **Photo editor**: Light (exposure, brightness, contrast, highlights, shadows, whites, blacks, clarity, vignette), Color (temperature, tint, vibrance, saturation, an 8-band color mixer and split-tone grading), Curves (RGB, R, G, B and luma, over the histogram), Detail (sharpening, noise reduction, film grain) and Crop (straighten, rotate, flip, free or fixed ratios), with undo, redo and hold to compare
+- **Presets**: seven built in, plus your own. Save your edit as a preset, set its strength, and share it as a small `.dbpreset` file
+- Edits never touch the original: Done saves a new copy in your chosen format, and opening that copy in the editor again picks up the edit where you left it
+- **Share sheet**: send a JPEG copy (opens everywhere), the original file, a lossless PNG or the RAW file, at full size, 2048 px or 1080 px, or save the copy to Download/Daybreak. Copies carry no location or camera info
 - **Pick Daybreak photos from other apps**: Daybreak appears in Android's file picker and in "choose a photo" requests, and the app receives a JPEG copy
 - Photos keep the right way up even when you point the phone at the sky or the floor
 - Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
-Not in yet: the editor, HDR and Night, video and the other modes. They follow the roadmap.
+Not in yet: masks, HDR and Night, video and the other modes. They follow the roadmap.
 
 ## Why Daybreak
 
@@ -76,7 +79,7 @@ Phone cameras capture 10-bit color and HDR, then most apps throw it away by savi
 | UI | Kotlin + Jetpack Compose |
 | Camera | CameraX with Camera2 interop |
 | Image engine | C++23 via JNI, built with CMake + Clang (Android NDK) |
-| GPU | Vulkan compute |
+| Editor rendering | Multithreaded C++ (CPU), exact at full resolution |
 | JPEG XL | [libjxl](https://github.com/libjxl/libjxl) |
 | HEIC | Android hardware HEVC encoder via HeifWriter |
 | Data | Room (SQLite) and DataStore |
@@ -123,10 +126,10 @@ ctest --test-dir build-native
 ## Project structure
 
 ```
-app/                 Screens (capture, library, viewer, settings) and data (MediaStore, DataStore)
+app/                 Screens (capture, library, viewer, editor, settings) and data (MediaStore, DataStore)
 core/designsystem/   Daybreak colors, type, fonts, icons and shared components
 core/engine/         Kotlin API over the native engine
-native/              C++23 engine: libjxl codec, EXIF, resizing, JNI bridge, tests
+native/              C++23 engine: libjxl codec, EXIF, resizing, the photo editor's renderer, JNI bridge, tests
 docs/                Assets and notes
 ```
 
@@ -138,8 +141,8 @@ More modules (camera, editor, and so on) split out as the app grows.
 | --- | --- |
 | v0.1 First light | Photo capture, JPEG XL saving, library grid and viewer |
 | v0.1.1 | In-app updates from GitHub Releases |
-| v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level (done) |
-| v0.3 Editor | Vulkan editor: Light, Color, Curves, Detail, Crop, presets, share sheet |
+| v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level, focus modes (done) |
+| v0.3 Editor | Light, Color, Curves, Detail, Crop, presets, share sheet (done) |
 | v0.4 Modes | HDR, Night, Portrait, Scan, video recording and trim |
 | v0.5 Library+ | Albums, search, multi-select, masks, landscape and tablet layouts |
 | v1.0 | Accessibility, translations, release on F-Droid and Google Play |

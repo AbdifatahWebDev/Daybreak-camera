@@ -214,6 +214,43 @@ class PhotoRepository(context: Context) {
         }
     }
 
+    /**
+     * Saves a converted copy (JPEG or PNG) in Download/Daybreak, outside the
+     * camera folder, so the photo library stays JPEG XL and HEIC only.
+     */
+    suspend fun saveCopyToDownloads(file: java.io.File, mime: String): Uri = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/Daybreak")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(downloads, values) ?: throw IOException("Android refused to create the file")
+        try {
+            val stream = resolver.openOutputStream(uri) ?: throw IOException("Could not open the file")
+            stream.use { out -> file.inputStream().use { it.copyTo(out) } }
+            resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        } catch (error: Exception) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw error
+        }
+        uri
+    }
+
+    /**
+     * Deletes a photo Daybreak saved, without asking. Returns false when Android
+     * wants the user to confirm (for example after a reinstall); the photo then stays.
+     */
+    suspend fun deleteOwned(photo: Photo): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val deleted = resolver.delete(photo.uri, null, null) > 0
+            if (deleted) notifyChanged()
+            deleted
+        } catch (refused: SecurityException) {
+            false
+        }
+    }
+
     /** Call after photos changed outside this class (a system dialog, a DNG from the camera). */
     fun notifyChanged() {
         _changes.update { it + 1 }

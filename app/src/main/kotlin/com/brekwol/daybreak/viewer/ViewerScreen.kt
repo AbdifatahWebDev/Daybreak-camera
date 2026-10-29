@@ -1,11 +1,7 @@
 package com.brekwol.daybreak.viewer
 
 import android.app.Activity
-import android.content.ClipData
-import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
-import android.net.Uri
 import android.text.format.DateFormat
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -57,21 +53,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DeleteResult
 import com.brekwol.daybreak.data.Photo
-import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
 import com.brekwol.daybreak.designsystem.FormatBadge
 import com.brekwol.daybreak.designsystem.R as DsR
-import java.io.File
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private sealed interface Loaded {
     data object Loading : Loaded
@@ -80,7 +71,7 @@ private sealed interface Loaded {
 }
 
 @Composable
-fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
+fun ViewerScreen(photo: Photo, onBack: () -> Unit, onEdit: (Photo) -> Unit) {
     val context = LocalContext.current
     val container = context.container
     val colors = Daybreak.colors
@@ -98,10 +89,7 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
     var offset by remember { mutableStateOf(Offset.Zero) }
     var showInfo by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    var chooseShare by remember { mutableStateOf(false) }
-    // The DNG to offer when sharing: the one paired with this photo, or the photo itself.
-    val rawFile = photo.raw ?: photo.takeIf { it.format == PhotoFormat.Dng }
-    var busy by remember { mutableStateOf(false) }
+    var sharing by remember { mutableStateOf(false) }
 
     val deleteLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
@@ -196,70 +184,20 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
                     .padding(vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceAround,
             ) {
-                ActionButton(DsR.drawable.ic_share, "Share", colors.ink, enabled = !busy) {
-                    if (rawFile != null) {
-                        chooseShare = true
-                        return@ActionButton
-                    }
-                    if (state !is Loaded.Ready) return@ActionButton
-                    busy = true
-                    scope.launch {
-                        try {
-                            shareAsJpeg(context, photo)
-                        } catch (error: Exception) {
-                            Toast.makeText(context, error.message ?: "Could not share", Toast.LENGTH_LONG).show()
-                        } finally {
-                            busy = false
-                        }
-                    }
-                }
+                ActionButton(DsR.drawable.ic_share, "Share", colors.ink) { sharing = true }
+                ActionButton(DsR.drawable.ic_edit, "Edit", colors.ink, enabled = state is Loaded.Ready) { onEdit(photo) }
                 ActionButton(DsR.drawable.ic_info, "Info", if (showInfo) colors.sun else colors.ink) {
                     showInfo = !showInfo
                 }
-                ActionButton(DsR.drawable.ic_delete, "Delete", colors.record, enabled = !busy) {
+                ActionButton(DsR.drawable.ic_delete, "Delete", colors.record) {
                     confirmDelete = true
                 }
             }
         }
     }
 
-    if (chooseShare && rawFile != null) {
-        AlertDialog(
-            onDismissRequest = { chooseShare = false },
-            title = { Text("Share") },
-            text = {
-                Text("A JPEG copy opens in any app. The RAW file is for editors like Lightroom and Snapseed.")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    chooseShare = false
-                    shareRaw(context, rawFile)
-                }) { Text("RAW (DNG)", color = colors.sun) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = state is Loaded.Ready,
-                    onClick = {
-                        chooseShare = false
-                        if (state is Loaded.Ready) {
-                            busy = true
-                            scope.launch {
-                                try {
-                                    shareAsJpeg(context, photo)
-                                } catch (error: Exception) {
-                                    Toast.makeText(context, error.message ?: "Could not share", Toast.LENGTH_LONG).show()
-                                } finally {
-                                    busy = false
-                                }
-                            }
-                        }
-                    },
-                ) { Text("JPEG copy", color = colors.ink) }
-            },
-            containerColor = colors.surface100,
-            titleContentColor = colors.ink,
-            textContentColor = colors.inkMuted,
-        )
+    if (sharing) {
+        ShareSheet(photo = photo, onDismiss = { sharing = false })
     }
 
     if (confirmDelete) {
@@ -367,32 +305,4 @@ private fun formatSize(bytes: Long): String = when {
     bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
     bytes >= 1_000 -> String.format(Locale.US, "%d KB", bytes / 1_000)
     else -> "$bytes B"
-}
-
-/**
- * Many apps can't open JPEG XL, HEIC or DNG, so sharing sends a temporary JPEG copy.
- * The copy lives in the app cache and never enters the photo library.
- */
-private suspend fun shareAsJpeg(context: Context, photo: Photo) {
-    val file = context.container.exporter.export(photo)
-    val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    val send = Intent(Intent.ACTION_SEND).apply {
-        type = "image/jpeg"
-        putExtra(Intent.EXTRA_STREAM, uri)
-        clipData = ClipData.newRawUri(photo.name, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    context.startActivity(Intent.createChooser(send, "Share photo"))
-}
-
-/** Shares the DNG itself, straight from the photo library. */
-private fun shareRaw(context: Context, raw: Photo) {
-    val send = Intent(Intent.ACTION_SEND).apply {
-        type = PhotoFormat.Dng.mime
-        putExtra(Intent.EXTRA_STREAM, raw.uri)
-        clipData = ClipData.newRawUri(raw.name, raw.uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    runCatching { context.startActivity(Intent.createChooser(send, "Share RAW")) }
-        .onFailure { Toast.makeText(context, "No app can receive a DNG file", Toast.LENGTH_LONG).show() }
 }

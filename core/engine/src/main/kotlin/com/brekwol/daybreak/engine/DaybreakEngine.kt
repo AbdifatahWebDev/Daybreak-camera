@@ -63,4 +63,50 @@ class DaybreakEngine {
      * orientation reset to normal (for formats that store rotation separately, like HEIC).
      */
     fun exifBlock(jpeg: ByteArray): ByteArray? = NativeEngine.exifBlock(jpeg)
+
+    /** Size of [width] x [height] after the edit's rotation, straighten and (optionally) crop. */
+    fun editOutputSize(width: Int, height: Int, edit: EditRecipe, applyCrop: Boolean = true): ImageSize {
+        val size = NativeEngine.editOutputSize(width, height, edit.packParams(), applyCrop)
+        return ImageSize(size[0], size[1])
+    }
+
+    /**
+     * Renders [source] through [edit] into a new bitmap whose long side is at most
+     * [maxLongSide] (0 keeps the edited size). [fullLongSide] is the long side of the
+     * full-resolution photo, so a preview made from a smaller [source] matches the export.
+     */
+    suspend fun renderEdit(
+        source: Bitmap,
+        edit: EditRecipe,
+        maxLongSide: Int = 0,
+        fullLongSide: Int = 0,
+        applyCrop: Boolean = true,
+    ): Bitmap = withContext(Dispatchers.Default) {
+        require(source.config == Bitmap.Config.ARGB_8888) { "Bitmap must be ARGB_8888" }
+        val out = editOutputSize(source.width, source.height, edit, applyCrop)
+        var width = out.width
+        var height = out.height
+        if (maxLongSide > 0 && maxOf(width, height) > maxLongSide) {
+            val scale = maxLongSide.toFloat() / maxOf(width, height)
+            width = (width * scale).toInt().coerceAtLeast(1)
+            height = (height * scale).toInt().coerceAtLeast(1)
+        }
+        val destination = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        renderEditInto(source, destination, edit, fullLongSide, applyCrop)
+        destination
+    }
+
+    /** Like [renderEdit], into an existing bitmap (reused between preview frames). */
+    fun renderEditInto(
+        source: Bitmap,
+        destination: Bitmap,
+        edit: EditRecipe,
+        fullLongSide: Int = 0,
+        applyCrop: Boolean = true,
+    ) {
+        require(destination.config == Bitmap.Config.ARGB_8888 && destination.isMutable) {
+            "Destination must be a mutable ARGB_8888 bitmap"
+        }
+        NativeEngine.renderEdit(source, destination, edit.packParams(), edit.packCurves(), fullLongSide, applyCrop)
+    }
 }

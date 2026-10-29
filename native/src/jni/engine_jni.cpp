@@ -6,10 +6,12 @@
 #include <android/log.h>
 #include <jni.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "daybreak/edit.hpp"
 #include "daybreak/engine.hpp"
 
 namespace {
@@ -170,4 +172,137 @@ Java_com_brekwol_daybreak_engine_NativeEngine_exifBlock(JNIEnv* env, jobject /* 
   std::vector<std::uint8_t> block = {'E', 'x', 'i', 'f', 0, 0};
   block.insert(block.end(), tiff.begin(), tiff.end());
   return to_java(env, block);
+}
+
+// ------------------------------------------------------------------ editor
+//
+// The recipe arrives as a float array in the layout of EditParams.kt (keep the
+// two in sync) and the curves as [count, x0, y0, x1, y1, ...] per channel.
+
+namespace {
+
+constexpr jsize kEditParamCount = 55;
+
+bool read_recipe(JNIEnv* env, jfloatArray params, jfloatArray curves, daybreak::EditRecipe& recipe) {
+  if (params == nullptr || env->GetArrayLength(params) != kEditParamCount) {
+    throw_java(env, "java/lang/IllegalArgumentException", "Edit parameters have the wrong length");
+    return false;
+  }
+  float p[kEditParamCount];
+  env->GetFloatArrayRegion(params, 0, kEditParamCount, p);
+  recipe.exposure = p[0];
+  recipe.brightness = p[1];
+  recipe.contrast = p[2];
+  recipe.highlights = p[3];
+  recipe.shadows = p[4];
+  recipe.whites = p[5];
+  recipe.blacks = p[6];
+  recipe.clarity = p[7];
+  recipe.vignette = p[8];
+  recipe.temperature = p[9];
+  recipe.tint = p[10];
+  recipe.vibrance = p[11];
+  recipe.saturation = p[12];
+  for (int i = 0; i < daybreak::kMixerBands; ++i) {
+    recipe.mixer[i].hue = p[13 + i * 3];
+    recipe.mixer[i].saturation = p[14 + i * 3];
+    recipe.mixer[i].luminance = p[15 + i * 3];
+  }
+  recipe.shadow_hue = p[37];
+  recipe.shadow_amount = p[38];
+  recipe.highlight_hue = p[39];
+  recipe.highlight_amount = p[40];
+  recipe.grading_balance = p[41];
+  recipe.sharpen = p[42];
+  recipe.sharpen_radius = p[43];
+  recipe.noise_luma = p[44];
+  recipe.noise_color = p[45];
+  recipe.grain = p[46];
+  recipe.grain_size = p[47];
+  recipe.quarter_turns = static_cast<int>(p[48]);
+  recipe.flip = p[49] != 0.0f;
+  recipe.straighten = p[50];
+  recipe.crop_left = p[51];
+  recipe.crop_top = p[52];
+  recipe.crop_right = p[53];
+  recipe.crop_bottom = p[54];
+
+  if (curves != nullptr) {
+    const jsize length = env->GetArrayLength(curves);
+    std::vector<float> c(static_cast<std::size_t>(length));
+    if (length > 0) env->GetFloatArrayRegion(curves, 0, length, c.data());
+    std::size_t at = 0;
+    for (int channel = 0; channel < daybreak::kCurveChannels && at < c.size(); ++channel) {
+      const auto count = static_cast<std::size_t>(std::max(0.0f, c[at++]));
+      if (at + count * 2 > c.size()) break;
+      auto& points = recipe.curves[channel];
+      points.clear();
+      for (std::size_t i = 0; i < count; ++i) points.push_back({c[at + i * 2], c[at + i * 2 + 1]});
+      at += count * 2;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_editOutputSize(JNIEnv* env, jobject /* this */, jint width,
+                                                             jint height, jfloatArray params,
+                                                             jboolean apply_crop) {
+  daybreak::EditRecipe recipe;
+  if (!read_recipe(env, params, nullptr, recipe)) return nullptr;
+  const auto size = daybreak::edit_output_size(static_cast<std::uint32_t>(std::max(0, width)),
+                                               static_cast<std::uint32_t>(std::max(0, height)), recipe,
+                                               apply_crop == JNI_TRUE);
+  const jint out[2] = {static_cast<jint>(size.width), static_cast<jint>(size.height)};
+  jintArray array = env->NewIntArray(2);
+  if (array != nullptr) env->SetIntArrayRegion(array, 0, 2, out);
+  return array;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_renderEdit(JNIEnv* env, jobject /* this */, jobject source,
+                                                         jobject destination, jfloatArray params,
+                                                         jfloatArray curves, jint full_long_side,
+                                                         jboolean apply_crop) {
+  daybreak::EditRecipe recipe;
+  if (!read_recipe(env, params, curves, recipe)) return;
+
+  AndroidBitmapInfo src_info{};
+  AndroidBitmapInfo dst_info{};
+  if (AndroidBitmap_getInfo(env, source, &src_info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+      AndroidBitmap_getInfo(env, destination, &dst_info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+    throw_java(env, "java/lang/IllegalArgumentException", "Could not read the bitmaps");
+    return;
+  }
+  if (src_info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || dst_info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) {
+    throw_java(env, "java/lang/IllegalArgumentException", "Bitmaps must be ARGB_8888");
+    return;
+  }
+  void* src_pixels = nullptr;
+  void* dst_pixels = nullptr;
+  if (AndroidBitmap_lockPixels(env, source, &src_pixels) != ANDROID_BITMAP_RESULT_SUCCESS) {
+    throw_java(env, "java/lang/IllegalStateException", "Could not lock the source bitmap");
+    return;
+  }
+  if (AndroidBitmap_lockPixels(env, destination, &dst_pixels) != ANDROID_BITMAP_RESULT_SUCCESS) {
+    AndroidBitmap_unlockPixels(env, source);
+    throw_java(env, "java/lang/IllegalStateException", "Could not lock the destination bitmap");
+    return;
+  }
+  const daybreak::RgbaView src_view{
+      std::span<const std::uint8_t>(static_cast<const std::uint8_t*>(src_pixels),
+                                    std::size_t{src_info.stride} * src_info.height),
+      src_info.width, src_info.height, src_info.stride};
+  const daybreak::MutableRgbaView dst_view{
+      std::span<std::uint8_t>(static_cast<std::uint8_t*>(dst_pixels), std::size_t{dst_info.stride} * dst_info.height),
+      dst_info.width, dst_info.height, dst_info.stride};
+  daybreak::RenderOptions options;
+  options.apply_crop = apply_crop == JNI_TRUE;
+  options.full_resolution_long_side = static_cast<std::uint32_t>(std::max(0, full_long_side));
+  const auto result = daybreak::render_edit(src_view, recipe, dst_view, options);
+  AndroidBitmap_unlockPixels(env, destination);
+  AndroidBitmap_unlockPixels(env, source);
+  if (!result) throw_java(env, "java/lang/IllegalStateException", result.error().message);
 }

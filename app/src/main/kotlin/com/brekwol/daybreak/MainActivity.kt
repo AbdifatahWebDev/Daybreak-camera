@@ -21,6 +21,7 @@ import com.brekwol.daybreak.capture.CaptureScreen
 import com.brekwol.daybreak.data.Photo
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakTheme
+import com.brekwol.daybreak.edit.EditorScreen
 import com.brekwol.daybreak.library.LibraryScreen
 import com.brekwol.daybreak.settings.SettingsScreen
 import com.brekwol.daybreak.viewer.ViewerScreen
@@ -37,6 +38,7 @@ private sealed interface Screen {
     data object Capture : Screen
     data object Library : Screen
     data class Viewer(val photo: Photo) : Screen
+    data class Editor(val photo: Photo) : Screen
     data object Settings : Screen
 }
 
@@ -74,7 +76,16 @@ private fun DaybreakApp() {
         }
         is Screen.Viewer -> DaybreakTheme(darkroom = true) {
             SystemBars()
-            ViewerScreen(photo = screen.photo, onBack = pop)
+            ViewerScreen(photo = screen.photo, onBack = pop, onEdit = { push(Screen.Editor(it)) })
+        }
+        is Screen.Editor -> DaybreakTheme(darkroom = true) {
+            SystemBars()
+            EditorScreen(
+                photo = screen.photo,
+                onClose = pop,
+                // Show the new copy in place of the photo that was opened.
+                onSaved = { saved -> stack = stack.dropLast(2) + Screen.Viewer(saved) },
+            )
         }
         Screen.Settings -> DaybreakTheme {
             SystemBars()
