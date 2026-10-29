@@ -167,11 +167,8 @@ private fun Editor(session: EditSession, onClose: () -> Unit, onSaved: (Photo) -
 
     fun done() {
         if (saving) return
-        if (!state.hasChanges && session.replacing == null) {
-            onClose()
-            return
-        }
-        if (state.recipe.isIdentity && session.replacing == null) {
+        // Nothing changed, or nothing to save: there is no new copy to make.
+        if (!state.hasChanges || (state.recipe.isIdentity && session.replacing == null)) {
             onClose()
             return
         }
