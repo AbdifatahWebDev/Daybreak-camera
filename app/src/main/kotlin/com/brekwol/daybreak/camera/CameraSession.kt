@@ -1,6 +1,5 @@
 package com.brekwol.daybreak.camera
 
-import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -50,6 +49,8 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -119,6 +120,11 @@ class CameraSession(context: Context) {
     @Volatile private var metered: LiveExposure? = null
     @Volatile private var autoExposureOn = true
     @Volatile private var lastLiveMs = 0L
+
+    private val inFlight = AtomicInteger(0)
+    /** Photos taken whose image hasn't reached the save queue yet. */
+    val capturesInFlight: Int
+        get() = inFlight.get()
 
     private val zoomObserver = Observer<ZoomState> { zoom ->
         _state.update {
@@ -317,6 +323,11 @@ class CameraSession(context: Context) {
             reportError("The camera isn't ready yet.")
             return
         }
+        // Counts this photo until its image reaches the save queue or fails, exactly once.
+        inFlight.incrementAndGet()
+        val settled = AtomicBoolean(false)
+        val settle = { if (settled.compareAndSet(false, true)) inFlight.decrementAndGet() }
+
         if (!rawActive) {
             capture.takePicture(
                 captureExecutor,
@@ -331,9 +342,11 @@ class CameraSession(context: Context) {
                             image.close()
                         }
                         if (frame != null) deliverFrame(frame)
+                        settle()
                     }
 
                     override fun onError(exception: ImageCaptureException) {
+                        settle()
                         reportError(exception.message ?: "The camera could not take the photo")
                     }
                 },
@@ -350,14 +363,12 @@ class CameraSession(context: Context) {
             jpegOptions,
             captureExecutor,
             object : ImageCapture.OnImageSavedCallback {
-                // Called twice: once for the DNG (a MediaStore Uri), once for the JPEG (our file).
+                // Called once per file, in either order: the DNG (RAW_SENSOR) and the JPEG.
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    val uri = outputFileResults.savedUri
-                    if (uri != null && uri.scheme == ContentResolver.SCHEME_CONTENT) {
+                    if (outputFileResults.imageFormat == ImageFormat.RAW_SENSOR) {
                         rawSaved()
                         return
                     }
-                    if (!jpegFile.exists()) return
                     val frame = try {
                         frameFromJpeg(jpegFile.readBytes(), stem, format)
                     } catch (error: Exception) {
@@ -367,10 +378,12 @@ class CameraSession(context: Context) {
                         jpegFile.delete()
                     }
                     if (frame != null) deliverFrame(frame)
+                    settle()
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     jpegFile.delete()
+                    settle()
                     reportError(exception.message ?: "The camera could not take the photo")
                 }
             },

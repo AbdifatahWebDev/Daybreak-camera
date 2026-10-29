@@ -61,6 +61,7 @@ import androidx.core.content.FileProvider
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DeleteResult
 import com.brekwol.daybreak.data.Photo
+import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
 import com.brekwol.daybreak.designsystem.FormatBadge
@@ -97,6 +98,9 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
     var offset by remember { mutableStateOf(Offset.Zero) }
     var showInfo by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var chooseShare by remember { mutableStateOf(false) }
+    // The DNG to offer when sharing: the one paired with this photo, or the photo itself.
+    val rawFile = photo.raw ?: photo.takeIf { it.format == PhotoFormat.Dng }
     var busy by remember { mutableStateOf(false) }
 
     val deleteLauncher = rememberLauncherForActivityResult(
@@ -193,6 +197,10 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceAround,
             ) {
                 ActionButton(DsR.drawable.ic_share, "Share", colors.ink, enabled = !busy) {
+                    if (rawFile != null) {
+                        chooseShare = true
+                        return@ActionButton
+                    }
                     val ready = state as? Loaded.Ready ?: return@ActionButton
                     busy = true
                     scope.launch {
@@ -213,6 +221,46 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (chooseShare && rawFile != null) {
+        AlertDialog(
+            onDismissRequest = { chooseShare = false },
+            title = { Text("Share") },
+            text = {
+                Text("A JPEG copy opens in any app. The RAW file is for editors like Lightroom and Snapseed.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    chooseShare = false
+                    shareRaw(context, rawFile)
+                }) { Text("RAW (DNG)", color = colors.sun) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = state is Loaded.Ready,
+                    onClick = {
+                        chooseShare = false
+                        val ready = state as? Loaded.Ready
+                        if (ready != null) {
+                            busy = true
+                            scope.launch {
+                                try {
+                                    shareAsJpeg(context, photo, ready.bitmap)
+                                } catch (error: Exception) {
+                                    Toast.makeText(context, error.message ?: "Could not share", Toast.LENGTH_LONG).show()
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        }
+                    },
+                ) { Text("JPEG copy", color = colors.ink) }
+            },
+            containerColor = colors.surface100,
+            titleContentColor = colors.ink,
+            textContentColor = colors.inkMuted,
+        )
     }
 
     if (confirmDelete) {
@@ -350,4 +398,16 @@ private suspend fun shareAsJpeg(context: Context, photo: Photo, preview: Bitmap)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(send, "Share photo"))
+}
+
+/** Shares the DNG itself, straight from the photo library. */
+private fun shareRaw(context: Context, raw: Photo) {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = PhotoFormat.Dng.mime
+        putExtra(Intent.EXTRA_STREAM, raw.uri)
+        clipData = ClipData.newRawUri(raw.name, raw.uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching { context.startActivity(Intent.createChooser(send, "Share RAW")) }
+        .onFailure { Toast.makeText(context, "No app can receive a DNG file", Toast.LENGTH_LONG).show() }
 }

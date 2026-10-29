@@ -1,6 +1,8 @@
 package com.brekwol.daybreak.camera
 
 import android.hardware.camera2.CameraMetadata
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -29,6 +31,22 @@ data class ProSettings(
     /** ISO or shutter is set by hand, so auto exposure is off. */
     val manualExposure: Boolean
         get() = iso != null || shutterNs != null
+
+    companion object {
+        /** Saves Pro values in the screen's saved state. */
+        val Saver: Saver<ProSettings, Any> = listSaver(
+            save = { listOf(it.iso, it.shutterNs, it.focusDiopters, it.whiteBalance.name, it.evIndex) },
+            restore = { values ->
+                ProSettings(
+                    iso = values[0] as Int?,
+                    shutterNs = values[1] as Long?,
+                    focusDiopters = values[2] as Float?,
+                    whiteBalance = WhiteBalance.entries.firstOrNull { it.name == values[3] } ?: WhiteBalance.Auto,
+                    evIndex = values[4] as Int? ?: 0,
+                )
+            },
+        )
+    }
 }
 
 /** What the current camera can do. */

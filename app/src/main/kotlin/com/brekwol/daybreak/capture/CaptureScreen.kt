@@ -47,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,6 +75,7 @@ import com.brekwol.daybreak.camera.ProSettings
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DaybreakSettings
 import com.brekwol.daybreak.data.PhotoFormat
+import com.brekwol.daybreak.data.SaveQueue
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakChip
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
@@ -161,7 +163,7 @@ private fun CameraContent(
 
     var backCamera by rememberSaveable { mutableStateOf(true) }
     var mode by rememberSaveable { mutableStateOf(CaptureMode.Photo) }
-    var pro by remember { mutableStateOf(ProSettings()) }
+    var pro by rememberSaveable(stateSaver = ProSettings.Saver) { mutableStateOf(ProSettings()) }
     var selectedControl by remember { mutableStateOf<ProControl?>(null) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
 
@@ -200,10 +202,24 @@ private fun CameraContent(
     }
 
     val roll by rememberRoll(enabled = settings.level)
+    // A light tick when the phone becomes level. It must tilt past 1.5° before it can tick again.
+    LaunchedEffect(settings.level) {
+        var level = false
+        snapshotFlow { roll?.let { kotlin.math.abs(levelError(it)) } }.collect { error ->
+            val next = when {
+                error == null -> false
+                level -> error < 1.5f
+                else -> error < 0.8f
+            }
+            if (next && !level) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            level = next
+        }
+    }
     val flash = remember { Animatable(0f) }
 
     fun capture() {
-        if (!container.saveQueue.canAcceptMore) {
+        val waiting = container.saveQueue.pending.value + session.capturesInFlight
+        if (waiting >= SaveQueue.MAX_PENDING) {
             Toast.makeText(context, "Still saving, one moment", Toast.LENGTH_SHORT).show()
             return
         }

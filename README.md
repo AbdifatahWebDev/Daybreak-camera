@@ -28,7 +28,7 @@
 - Live **histogram** and a **level** that turns gold when the phone is straight
 - The shutter never waits: photos encode in the background while you keep shooting
 - Library grid with fast cached thumbnails, full-screen viewer with zoom, photo info and delete
-- Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet
+- Share sends a temporary JPEG copy, because most apps can't open JPEG XL yet; RAW photos can also share their DNG
 - Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
 Not in yet: the editor, HDR and Night, video and the other modes. They follow the roadmap.

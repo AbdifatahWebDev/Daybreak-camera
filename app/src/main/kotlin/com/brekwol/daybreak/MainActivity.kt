@@ -13,6 +13,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -47,21 +48,29 @@ private fun DaybreakApp() {
 
     BackHandler(enabled = stack.size > 1) { pop() }
 
+    // Keeps each screen's saved state (camera mode, Pro values, library scroll)
+    // while another screen is on top of it.
+    val savedStates = rememberSaveableStateHolder()
+
     when (val screen = stack.last()) {
         Screen.Capture -> DaybreakTheme(darkroom = true) {
             SystemBars()
-            CaptureScreen(
-                onOpenLibrary = { push(Screen.Library) },
-                onOpenSettings = { push(Screen.Settings) },
-            )
+            savedStates.SaveableStateProvider("capture") {
+                CaptureScreen(
+                    onOpenLibrary = { push(Screen.Library) },
+                    onOpenSettings = { push(Screen.Settings) },
+                )
+            }
         }
         Screen.Library -> DaybreakTheme {
             SystemBars()
-            LibraryScreen(
-                onOpenCamera = pop,
-                onOpenPhoto = { push(Screen.Viewer(it)) },
-                onOpenSettings = { push(Screen.Settings) },
-            )
+            savedStates.SaveableStateProvider("library") {
+                LibraryScreen(
+                    onOpenCamera = pop,
+                    onOpenPhoto = { push(Screen.Viewer(it)) },
+                    onOpenSettings = { push(Screen.Settings) },
+                )
+            }
         }
         is Screen.Viewer -> DaybreakTheme(darkroom = true) {
             SystemBars()
