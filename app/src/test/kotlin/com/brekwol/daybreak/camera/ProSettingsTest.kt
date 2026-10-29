@@ -49,4 +49,20 @@ class ProSettingsTest {
         assertSame(fine, fine.balanced(0.1f, caps, live))
         assertTrue(ProSettings().allAuto)
     }
+
+    @Test
+    fun focusModes() {
+        assertEquals(FocusMode.Multi, ProSettings().focusMode)
+        assertEquals(FocusMode.Center, ProSettings(focusCenter = true).focusMode)
+        // A distance set by hand wins over center focus.
+        assertEquals(FocusMode.Manual, ProSettings(focusDiopters = 2f, focusCenter = true).focusMode)
+        assertTrue(ProSettings().allAuto)
+        assertTrue(!ProSettings(focusCenter = true).allAuto)
+    }
+
+    @Test
+    fun centerFocusNeedsFocusAreas() {
+        assertTrue(!caps.centerFocus)
+        assertTrue(caps.copy(afRegions = true, activeArrayWidth = 4000, activeArrayHeight = 3000).centerFocus)
+    }
 }

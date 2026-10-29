@@ -11,6 +11,7 @@ import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.MeteringRectangle
 import android.media.ExifInterface
 import android.os.SystemClock
 import android.util.Size
@@ -281,6 +282,13 @@ class CameraSession(context: Context) {
         if (focus != null && caps.manualFocus) {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
             options.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focus.coerceIn(0f, caps.minFocusDiopters))
+        } else if (settings.focusCenter && caps.centerFocus) {
+            // Continuous autofocus that only looks at the middle of the frame.
+            options.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AF_MODE,
+                CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            )
+            options.setCaptureRequestOption(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(centerRegion(caps)))
         }
         if (settings.whiteBalance != WhiteBalance.Auto && settings.whiteBalance in caps.whiteBalances) {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, settings.whiteBalance.awbMode)
@@ -296,7 +304,8 @@ class CameraSession(context: Context) {
     fun focusAt(factory: MeteringPointFactory, x: Float, y: Float): Boolean {
         val camera = camera ?: return false
         var flags = 0
-        if (pro.focusDiopters == null) flags = flags or FocusMeteringAction.FLAG_AF
+        // Center and manual focus keep their own focus; a tap then only meters.
+        if (pro.focusMode == FocusMode.Multi) flags = flags or FocusMeteringAction.FLAG_AF
         if (!pro.manualExposure) flags = flags or FocusMeteringAction.FLAG_AE
         if (pro.whiteBalance == WhiteBalance.Auto) flags = flags or FocusMeteringAction.FLAG_AWB
         if (flags == 0) return false
@@ -423,6 +432,7 @@ class CameraSession(context: Context) {
         val minFocus = camera2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
         val afModes = camera2.getCameraCharacteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: IntArray(0)
         val awbModes = camera2.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: IntArray(0)
+        val activeArray = camera2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val exposure = info.exposureState
         return CameraCapabilities(
             manualSensor = manualSensor && isoRange != null && shutterRange != null,
@@ -437,6 +447,21 @@ class CameraSession(context: Context) {
             },
             evStep = exposure.exposureCompensationStep.toFloat(),
             raw = rawSupported,
+            afRegions = (camera2.getCameraCharacteristic(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0,
+            activeArrayWidth = activeArray?.width() ?: 0,
+            activeArrayHeight = activeArray?.height() ?: 0,
+        )
+    }
+
+    /** A square in the middle of the frame, a fifth of its short side. */
+    private fun centerRegion(caps: CameraCapabilities): MeteringRectangle {
+        val side = (minOf(caps.activeArrayWidth, caps.activeArrayHeight) / 5).coerceAtLeast(1)
+        return MeteringRectangle(
+            (caps.activeArrayWidth - side) / 2,
+            (caps.activeArrayHeight - side) / 2,
+            side,
+            side,
+            MeteringRectangle.METERING_WEIGHT_MAX,
         )
     }
 

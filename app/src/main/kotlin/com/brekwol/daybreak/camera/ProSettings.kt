@@ -18,23 +18,42 @@ enum class WhiteBalance(val label: String, val awbMode: Int) {
     Fluorescent("Fluorescent", CameraMetadata.CONTROL_AWB_MODE_FLUORESCENT),
 }
 
+/** How the lens focuses. */
+enum class FocusMode(val label: String) {
+    /** The camera picks what to focus on, anywhere in the frame. */
+    Multi("Multi"),
+    /** Keeps focusing on the middle of the frame. */
+    Center("Center"),
+    /** A fixed distance set by hand. */
+    Manual("Manual"),
+}
+
 /** Manual camera settings for Pro mode. A null value means automatic. */
 data class ProSettings(
     val iso: Int? = null,
     val shutterNs: Long? = null,
-    /** Lens focus distance in diopters (1 / metres); 0 is infinity. */
+    /** Lens focus distance in diopters (1 / metres); 0 is infinity. Set means manual focus. */
     val focusDiopters: Float? = null,
     val whiteBalance: WhiteBalance = WhiteBalance.Auto,
     /** Exposure compensation in device steps; used while exposure is automatic. */
     val evIndex: Int = 0,
+    /** Autofocus on the middle of the frame only (ignored while focus is manual). */
+    val focusCenter: Boolean = false,
 ) {
+    val focusMode: FocusMode
+        get() = when {
+            focusDiopters != null -> FocusMode.Manual
+            focusCenter -> FocusMode.Center
+            else -> FocusMode.Multi
+        }
+
     /** ISO or shutter is set by hand, so auto exposure is off. */
     val manualExposure: Boolean
         get() = iso != null || shutterNs != null
 
     /** Nothing is set by hand. */
     val allAuto: Boolean
-        get() = iso == null && shutterNs == null && focusDiopters == null &&
+        get() = iso == null && shutterNs == null && focusDiopters == null && !focusCenter &&
             whiteBalance == WhiteBalance.Auto && evIndex == 0
 
     /**
@@ -82,7 +101,7 @@ data class ProSettings(
 
         /** Saves Pro values in the screen's saved state. */
         val Saver: Saver<ProSettings, Any> = listSaver(
-            save = { listOf(it.iso, it.shutterNs, it.focusDiopters, it.whiteBalance.name, it.evIndex) },
+            save = { listOf(it.iso, it.shutterNs, it.focusDiopters, it.whiteBalance.name, it.evIndex, it.focusCenter) },
             restore = { values ->
                 ProSettings(
                     iso = values[0] as Int?,
@@ -90,6 +109,7 @@ data class ProSettings(
                     focusDiopters = values[2] as Float?,
                     whiteBalance = WhiteBalance.entries.firstOrNull { it.name == values[3] } ?: WhiteBalance.Auto,
                     evIndex = values[4] as Int? ?: 0,
+                    focusCenter = values.getOrNull(5) as Boolean? ?: false,
                 )
             },
         )
@@ -108,9 +128,17 @@ data class CameraCapabilities(
     /** Exposure value of one compensation step, e.g. 1/3. */
     val evStep: Float = 0f,
     val raw: Boolean = false,
+    /** The camera accepts an autofocus area, so focus can stay on the middle of the frame. */
+    val afRegions: Boolean = false,
+    /** Size of the sensor's active pixel array, the coordinate space of focus areas. */
+    val activeArrayWidth: Int = 0,
+    val activeArrayHeight: Int = 0,
 ) {
     val manualFocus: Boolean
         get() = minFocusDiopters > 0f
+
+    val centerFocus: Boolean
+        get() = afRegions && activeArrayWidth > 0 && activeArrayHeight > 0
 
     val exposureCompensation: Boolean
         get() = evRange.first < evRange.last && evStep > 0f

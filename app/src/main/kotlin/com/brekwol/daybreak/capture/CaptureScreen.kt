@@ -71,6 +71,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.brekwol.daybreak.camera.CameraSession
+import com.brekwol.daybreak.camera.FocusMode
 import com.brekwol.daybreak.camera.ProSettings
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DaybreakSettings
@@ -338,6 +339,9 @@ private fun CameraContent(
                 LevelOverlay(roll = currentRoll, levelColor = colors.sun, modifier = Modifier.fillMaxSize())
             }
             focusPoint?.let { point -> FocusRing(point, Modifier.fillMaxSize()) }
+            if (mode == CaptureMode.Pro && pro.focusMode == FocusMode.Center && camera.capabilities.centerFocus) {
+                CenterFocusBox(Modifier.fillMaxSize())
+            }
             val bins = histogram
             if (settings.histogram && bins != null) {
                 HistogramView(
@@ -544,6 +548,29 @@ private fun FocusRing(point: Offset, modifier: Modifier = Modifier) {
     val color = Daybreak.colors.sun
     Canvas(modifier) {
         drawCircle(color, radius = 32.dp.toPx(), center = point, style = Stroke(width = 1.5.dp.toPx()))
+    }
+}
+
+/** Where Center focus looks: a square in the middle, a fifth of the frame's width. */
+@Composable
+private fun CenterFocusBox(modifier: Modifier = Modifier) {
+    val color = Daybreak.colors.ink.copy(alpha = 0.85f)
+    Canvas(modifier) {
+        val side = size.width / 5f
+        val left = (size.width - side) / 2f
+        val top = (size.height - side) / 2f
+        val arm = side / 4f
+        val stroke = 1.5.dp.toPx()
+        val corners = listOf(
+            Offset(left, top) to Offset(1f, 1f),
+            Offset(left + side, top) to Offset(-1f, 1f),
+            Offset(left, top + side) to Offset(1f, -1f),
+            Offset(left + side, top + side) to Offset(-1f, -1f),
+        )
+        corners.forEach { (corner, direction) ->
+            drawLine(color, corner, corner + Offset(arm * direction.x, 0f), strokeWidth = stroke)
+            drawLine(color, corner, corner + Offset(0f, arm * direction.y), strokeWidth = stroke)
+        }
     }
 }
 

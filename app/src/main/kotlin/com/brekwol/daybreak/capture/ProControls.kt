@@ -1,5 +1,6 @@
 package com.brekwol.daybreak.capture
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -11,33 +12,40 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.brekwol.daybreak.camera.CameraCapabilities
+import com.brekwol.daybreak.camera.FocusMode
 import com.brekwol.daybreak.camera.LiveExposure
 import com.brekwol.daybreak.camera.ProFormat
 import com.brekwol.daybreak.camera.ProSettings
 import com.brekwol.daybreak.camera.WhiteBalance
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakChip
+import com.brekwol.daybreak.designsystem.RulerDial
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.roundToInt
+
+private const val FOCUS_TICKS = 101
 
 enum class CaptureMode(val label: String) { Photo("Photo"), Pro("Pro") }
 
@@ -173,6 +181,8 @@ fun ProDial(
                         count = stops.size,
                         index = ProFormat.nearestIndex(stops, current) { a, b -> abs(ln(a.toDouble() / b)) },
                         onIndex = { onChange(pro.copy(iso = stops[it])) },
+                        label = "ISO",
+                        valueText = value,
                     )
                 }
             }
@@ -186,23 +196,12 @@ fun ProDial(
                         count = stops.size,
                         index = ProFormat.nearestIndex(stops, current) { a, b -> abs(ln(a.toDouble() / b)) },
                         onIndex = { onChange(pro.copy(shutterNs = stops[it])) },
+                        label = "Shutter speed",
+                        valueText = value,
                     )
                 }
             }
-            ProControl.Focus -> {
-                val closest = capabilities.minFocusDiopters
-                if (!capabilities.manualFocus) {
-                    Unavailable("This lens has fixed focus.")
-                } else {
-                    // Left is the closest focus, right is infinity.
-                    val diopters = pro.focusDiopters ?: live.focusDiopters
-                    DialSlider(
-                        value = (1f - diopters / closest).coerceIn(0f, 1f),
-                        range = 0f..1f,
-                        onValue = { onChange(pro.copy(focusDiopters = (1f - it) * closest)) },
-                    )
-                }
-            }
+            ProControl.Focus -> FocusDial(pro, capabilities, live, onChange)
             ProControl.WhiteBalance -> {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -226,6 +225,8 @@ fun ProDial(
                         count = range.last - range.first + 1,
                         index = pro.evIndex.coerceIn(range) - range.first,
                         onIndex = { onChange(pro.copy(evIndex = range.first + it)) },
+                        label = "Exposure compensation",
+                        valueText = value,
                     )
                 }
             }
@@ -244,40 +245,135 @@ private fun Unavailable(text: String) {
     )
 }
 
-/** A slider over [count] stops that reports the nearest stop. */
+/** Center, Multi and Manual focus, and the distance ruler while focus is manual. */
 @Composable
-private fun StopSlider(count: Int, index: Int, onIndex: (Int) -> Unit) {
-    if (count <= 1) return
-    DialSlider(
-        value = index.toFloat(),
-        range = 0f..(count - 1).toFloat(),
-        onValue = { position ->
-            val next = position.roundToInt().coerceIn(0, count - 1)
-            if (next != index) onIndex(next)
-        },
-    )
+private fun FocusDial(
+    pro: ProSettings,
+    capabilities: CameraCapabilities,
+    live: LiveExposure,
+    onChange: (ProSettings) -> Unit,
+) {
+    val closest = capabilities.minFocusDiopters
+    val modes = buildList {
+        if (capabilities.centerFocus) add(FocusMode.Center)
+        add(FocusMode.Multi)
+        if (capabilities.manualFocus) add(FocusMode.Manual)
+    }
+    if (modes.size == 1) {
+        Unavailable("This lens has fixed focus.")
+        return
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        modes.forEach { mode ->
+            FocusModeButton(
+                mode = mode,
+                selected = pro.focusMode == mode,
+                onClick = {
+                    onChange(
+                        when (mode) {
+                            FocusMode.Multi -> pro.copy(focusDiopters = null, focusCenter = false)
+                            FocusMode.Center -> pro.copy(focusDiopters = null, focusCenter = true)
+                            // Start from the distance autofocus found, so nothing jumps.
+                            FocusMode.Manual -> pro.copy(
+                                focusDiopters = pro.focusDiopters ?: live.focusDiopters.coerceIn(0f, closest),
+                                focusCenter = false,
+                            )
+                        },
+                    )
+                },
+            )
+        }
+    }
+    val diopters = pro.focusDiopters
+    if (diopters != null && closest > 0f) {
+        Spacer(Modifier.height(6.dp))
+        // Left is the closest focus, right is infinity.
+        val ticks = FOCUS_TICKS
+        RulerDial(
+            position = (1f - diopters / closest).coerceIn(0f, 1f) * (ticks - 1),
+            tickCount = ticks,
+            onPosition = { position ->
+                onChange(pro.copy(focusDiopters = (1f - position / (ticks - 1)) * closest))
+            },
+            contentDescription = "Focus distance",
+            stateDescription = ProFormat.focus(diopters),
+            majorEvery = 10,
+        )
+        Row(Modifier.fillMaxWidth()) {
+            Text("Near", style = Daybreak.type.caption, color = Daybreak.colors.inkMuted, modifier = Modifier.weight(1f))
+            Text("∞", style = Daybreak.type.readout, color = Daybreak.colors.inkMuted)
+        }
+    }
 }
 
 @Composable
-private fun DialSlider(value: Float, range: ClosedFloatingPointRange<Float>, onValue: (Float) -> Unit) {
+private fun FocusModeButton(mode: FocusMode, selected: Boolean, onClick: () -> Unit) {
     val colors = Daybreak.colors
-    Box(Modifier.fillMaxWidth()) {
-        Slider(
-            value = value,
-            onValueChange = onValue,
-            valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = colors.ink,
-                activeTrackColor = colors.sun,
-                inactiveTrackColor = colors.line,
-            ),
-        )
+    val tint = if (selected) colors.sun else colors.ink
+    Column(
+        modifier = Modifier
+            .widthIn(min = 76.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) colors.sunGlow else Color.Transparent)
+            .clickable(role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .semantics { contentDescription = "${mode.label} focus" + if (selected) ", selected" else "" },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+            when (mode) {
+                FocusMode.Manual -> Text("M", style = Daybreak.type.label, color = tint)
+                else -> Canvas(Modifier.size(18.dp)) {
+                    val dot = 1.6.dp.toPx()
+                    if (mode == FocusMode.Center) {
+                        drawCircle(tint, radius = dot * 1.4f, center = center)
+                    } else {
+                        for (row in 0..2) {
+                            for (column in 0..2) {
+                                drawCircle(
+                                    tint,
+                                    radius = dot,
+                                    center = Offset(size.width * (0.2f + 0.3f * column), size.height * (0.2f + 0.3f * row)),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(mode.label.uppercase(), style = Daybreak.type.mode, color = tint)
     }
+}
+
+/** A ruler over [count] stops that reports the nearest stop, with a tick of haptics per stop. */
+@Composable
+private fun StopSlider(count: Int, index: Int, onIndex: (Int) -> Unit, label: String, valueText: String) {
+    if (count <= 1) return
+    val haptics = LocalHapticFeedback.current
+    RulerDial(
+        position = index.toFloat(),
+        tickCount = count,
+        onPosition = { position ->
+            val next = position.roundToInt().coerceIn(0, count - 1)
+            if (next != index) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onIndex(next)
+            }
+        },
+        contentDescription = label,
+        stateDescription = valueText,
+        majorEvery = 3,
+        tickSpacing = 14.dp,
+    )
 }
 
 private fun isAvailable(control: ProControl, pro: ProSettings, caps: CameraCapabilities): Boolean = when (control) {
     ProControl.Iso, ProControl.Shutter -> caps.manualSensor
-    ProControl.Focus -> caps.manualFocus
+    ProControl.Focus -> caps.manualFocus || caps.centerFocus
     ProControl.WhiteBalance -> caps.whiteBalances.size > 1
     ProControl.Ev -> caps.exposureCompensation && !pro.manualExposure
 }
@@ -285,7 +381,7 @@ private fun isAvailable(control: ProControl, pro: ProSettings, caps: CameraCapab
 private fun resetToAuto(control: ProControl, pro: ProSettings): ProSettings = when (control) {
     ProControl.Iso -> pro.copy(iso = null)
     ProControl.Shutter -> pro.copy(shutterNs = null)
-    ProControl.Focus -> pro.copy(focusDiopters = null)
+    ProControl.Focus -> pro.copy(focusDiopters = null, focusCenter = false)
     ProControl.WhiteBalance -> pro.copy(whiteBalance = WhiteBalance.Auto)
     ProControl.Ev -> pro.copy(evIndex = 0)
 }
@@ -301,7 +397,11 @@ private fun displayValue(
         ?: ((if (live.iso > 0) "A ${live.iso}" else "Auto") to false)
     ProControl.Shutter -> pro.shutterNs?.let { ProFormat.shutter(it) to true }
         ?: ((if (live.shutterNs > 0) "A ${ProFormat.shutter(live.shutterNs)}" else "Auto") to false)
-    ProControl.Focus -> pro.focusDiopters?.let { ProFormat.focus(it) to true } ?: ("AF" to false)
+    ProControl.Focus -> when (pro.focusMode) {
+        FocusMode.Manual -> ProFormat.focus(pro.focusDiopters ?: 0f) to true
+        FocusMode.Center -> "AF·C" to true
+        FocusMode.Multi -> "AF" to false
+    }
     ProControl.WhiteBalance -> if (pro.whiteBalance == WhiteBalance.Auto) {
         "AWB" to false
     } else {
