@@ -59,7 +59,7 @@ data class ProSettings(
     /**
      * Manual ISO and shutter changed to bring the exposure [meterEv] stops back to
      * normal. A value set by hand stays when the other one can make up the
-     * difference; with both set, the shutter moves first (down to 1/4 s, still
+     * difference; with both set, the shutter moves first (down to 1/15 s, still
      * sharp handheld) and ISO makes up the rest. Values snap to the camera's stops.
      */
     fun balanced(meterEv: Float, caps: CameraCapabilities, live: LiveExposure): ProSettings {
@@ -96,8 +96,11 @@ data class ProSettings(
     }
 
     companion object {
-        /** Longest shutter speed balancing picks, 1/4 s: slower blurs handheld photos. */
-        const val HANDHELD_LIMIT_NS = 250_000_000L
+        /**
+         * Longest shutter speed Daybreak picks by itself, 1/15 s. Slower shutters
+         * blur handheld photos and slow the viewfinder down to a few frames a second.
+         */
+        const val HANDHELD_LIMIT_NS = 66_666_667L
 
         /** Saves Pro values in the screen's saved state. */
         val Saver: Saver<ProSettings, Any> = listSaver(

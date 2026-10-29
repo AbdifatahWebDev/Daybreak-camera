@@ -199,6 +199,15 @@ fun ProDial(
                         label = "Shutter speed",
                         valueText = value,
                     )
+                    val chosen = pro.shutterNs
+                    if (chosen != null && chosen > ProSettings.HANDHELD_LIMIT_NS) {
+                        Text(
+                            "Slow shutter: the viewfinder updates slowly, and photos blur unless the phone is kept still.",
+                            style = Daybreak.type.caption,
+                            color = colors.inkMuted,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
             }
             ProControl.Focus -> FocusDial(pro, capabilities, live, onChange)

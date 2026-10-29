@@ -271,12 +271,14 @@ class CameraSession(context: Context) {
             val exposure = metered?.let { it.iso.toDouble() * it.shutterNs } ?: DEFAULT_EXPOSURE
             val iso = (settings.iso ?: (exposure / (settings.shutterNs ?: 1L)).roundToInt())
                 .coerceIn(isoRange)
-            val shutter = (settings.shutterNs ?: (exposure / iso).roundToLong())
+            // An automatic shutter stays hand-holdable; the meter shows when that leaves the photo dark.
+            val shutter = (settings.shutterNs ?: (exposure / iso).roundToLong().coerceAtMost(ProSettings.HANDHELD_LIMIT_NS))
                 .coerceIn(shutterRange)
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
             options.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
             options.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
-            options.setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, shutter)
+            // Short shutters keep the viewfinder at a steady 30 frames a second.
+            options.setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, maxOf(shutter, STEADY_FRAME_NS))
         }
         val focus = settings.focusDiopters
         if (focus != null && caps.manualFocus) {
@@ -467,6 +469,7 @@ class CameraSession(context: Context) {
 
     private companion object {
         const val LIVE_INTERVAL_MS = 150L
+        const val STEADY_FRAME_NS = 33_333_333L
         const val MAX_SHUTTER_NS = 30_000_000_000L
         // ISO 400 at 1/100 s, used before anything was metered.
         const val DEFAULT_EXPOSURE = 400.0 * 10_000_000L

@@ -65,4 +65,14 @@ class ProSettingsTest {
         assertTrue(!caps.centerFocus)
         assertTrue(caps.copy(afRegions = true, activeArrayWidth = 4000, activeArrayHeight = 3000).centerFocus)
     }
+
+    @Test
+    fun aChosenLowIsoIndoorsRaisesIsoNotTheShutter() {
+        // ISO 50 indoors: the automatic shutter stops at 1/15 s and the photo is 3 stops dark.
+        val chosen = ProSettings(iso = 50)
+        val live = LiveExposure(iso = 50, shutterNs = ProSettings.HANDHELD_LIMIT_NS)
+        val fixed = chosen.balanced(meterEv = -3f, caps = caps, live = live)
+        assertTrue("shutter stays handheld", fixed.shutterNs!! <= ProSettings.HANDHELD_LIMIT_NS)
+        assertEquals(400, fixed.iso)
+    }
 }

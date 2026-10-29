@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,6 +86,7 @@ import com.brekwol.daybreak.designsystem.R as DsR
 import com.brekwol.daybreak.designsystem.ShutterButton
 import com.brekwol.daybreak.update.UpdateState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 @Composable
@@ -157,7 +159,9 @@ private fun CameraContent(
     }
     val camera by session.state.collectAsStateWithLifecycle()
     val live by session.live.collectAsStateWithLifecycle()
-    val histogram by session.histogram.collectAsStateWithLifecycle()
+    // Fast-changing values are passed on as State and read only by the small
+    // overlays that draw them, so the whole screen doesn't redraw 10+ times a second.
+    val histogram = session.histogram.collectAsStateWithLifecycle()
     val previewView = remember {
         PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
     }
@@ -181,10 +185,17 @@ private fun CameraContent(
             )
         }
     }
-    val meter by session.meter.collectAsStateWithLifecycle()
-    val effectivePro = if (mode == CaptureMode.Pro) pro else ProSettings()
-    LaunchedEffect(effectivePro, camera.ready) {
-        if (camera.ready) session.applyPro(effectivePro)
+    val meter = session.meter.collectAsStateWithLifecycle()
+    // Dials change values many times a second; the camera gets at most about 20
+    // updates a second (always the newest), so the viewfinder doesn't stutter.
+    LaunchedEffect(camera.ready) {
+        if (!camera.ready) return@LaunchedEffect
+        snapshotFlow { if (mode == CaptureMode.Pro) pro else ProSettings() }
+            .conflate()
+            .collect { settings ->
+                session.applyPro(settings)
+                delay(APPLY_INTERVAL_MS)
+            }
     }
     LaunchedEffect(focusPoint) {
         if (focusPoint != null) {
@@ -204,11 +215,11 @@ private fun CameraContent(
         }
     }
 
-    val roll by rememberRoll(enabled = settings.level)
+    val roll = rememberRoll(enabled = settings.level)
     // A light tick when the phone becomes level. It must tilt past 1.5° before it can tick again.
     LaunchedEffect(settings.level) {
         var level = false
-        snapshotFlow { roll?.let { kotlin.math.abs(levelError(it)) } }.collect { error ->
+        snapshotFlow { roll.value?.let { kotlin.math.abs(levelError(it)) } }.collect { error ->
             val next = when {
                 error == null -> false
                 level -> error < 1.5f
@@ -334,18 +345,14 @@ private fun CameraContent(
                     },
             )
             if (settings.grid) ThirdsGrid(Modifier.fillMaxSize())
-            val currentRoll = roll
-            if (settings.level && currentRoll != null) {
-                LevelOverlay(roll = currentRoll, levelColor = colors.sun, modifier = Modifier.fillMaxSize())
-            }
+            if (settings.level) LiveLevel(roll, Modifier.fillMaxSize())
             focusPoint?.let { point -> FocusRing(point, Modifier.fillMaxSize()) }
             if (mode == CaptureMode.Pro && pro.focusMode == FocusMode.Center && camera.capabilities.centerFocus) {
                 CenterFocusBox(Modifier.fillMaxSize())
             }
-            val bins = histogram
-            if (settings.histogram && bins != null) {
-                HistogramView(
-                    bins = bins,
+            if (settings.histogram) {
+                LiveHistogram(
+                    state = histogram,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(12.dp)
@@ -353,11 +360,10 @@ private fun CameraContent(
                 )
             }
             // With ISO or shutter set by hand, show how far the exposure is from normal.
-            val meterEv = meter
-            if (mode == CaptureMode.Pro && pro.manualExposure && meterEv != null) {
-                ExposureMeter(
-                    ev = meterEv,
-                    onBalance = { pro = pro.balanced(meterEv, camera.capabilities, live) },
+            if (mode == CaptureMode.Pro && pro.manualExposure) {
+                LiveMeter(
+                    state = meter,
+                    onBalance = { ev -> pro = pro.balanced(ev, camera.capabilities, session.live.value) },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(12.dp),
@@ -451,6 +457,8 @@ private fun CameraContent(
     }
 }
 
+private const val APPLY_INTERVAL_MS = 50L
+
 @Composable
 private fun ModeSwitcher(mode: CaptureMode, onMode: (CaptureMode) -> Unit) {
     val colors = Daybreak.colors
@@ -519,6 +527,24 @@ private fun ExposureMeter(ev: Float, onBalance: () -> Unit, modifier: Modifier =
         )
         Text(hint, style = Daybreak.type.caption, color = colors.inkMuted)
     }
+}
+
+@Composable
+private fun LiveLevel(roll: State<Float?>, modifier: Modifier = Modifier) {
+    val current = roll.value ?: return
+    LevelOverlay(roll = current, levelColor = Daybreak.colors.sun, modifier = modifier)
+}
+
+@Composable
+private fun LiveHistogram(state: State<FloatArray?>, modifier: Modifier = Modifier) {
+    val bins = state.value ?: return
+    HistogramView(bins, modifier)
+}
+
+@Composable
+private fun LiveMeter(state: State<Float?>, onBalance: (Float) -> Unit, modifier: Modifier = Modifier) {
+    val ev = state.value ?: return
+    ExposureMeter(ev = ev, onBalance = { onBalance(ev) }, modifier = modifier)
 }
 
 @Composable
