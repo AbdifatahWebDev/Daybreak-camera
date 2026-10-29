@@ -168,17 +168,19 @@ private fun CameraContent(
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
 
     val settingsLoaded = loadedSettings != null
-    LaunchedEffect(settingsLoaded, backCamera, settings.raw, settings.histogram, lifecycleOwner) {
+    // Frames are always analyzed (for the exposure meter); the setting only shows the graph.
+    LaunchedEffect(settingsLoaded, backCamera, settings.raw, lifecycleOwner) {
         if (settingsLoaded) {
             session.bind(
                 owner = lifecycleOwner,
                 surfaceProvider = previewView.surfaceProvider,
                 backCamera = backCamera,
                 raw = settings.raw,
-                histogram = settings.histogram,
+                histogram = true,
             )
         }
     }
+    val meter by session.meter.collectAsStateWithLifecycle()
     val effectivePro = if (mode == CaptureMode.Pro) pro else ProSettings()
     LaunchedEffect(effectivePro, camera.ready) {
         if (camera.ready) session.applyPro(effectivePro)
@@ -346,6 +348,17 @@ private fun CameraContent(
                         .size(width = 112.dp, height = 56.dp),
                 )
             }
+            // With ISO or shutter set by hand, show how far the exposure is from normal.
+            val meterEv = meter
+            if (mode == CaptureMode.Pro && pro.manualExposure && meterEv != null) {
+                ExposureMeter(
+                    ev = meterEv,
+                    onBalance = { pro = pro.balanced(meterEv, camera.capabilities, live) },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp),
+                )
+            }
             camera.error?.let { message ->
                 Text(
                     text = message,
@@ -395,6 +408,10 @@ private fun CameraContent(
                 live = live,
                 selected = selectedControl,
                 onSelect = { selectedControl = it },
+                onAllAuto = {
+                    pro = ProSettings()
+                    selectedControl = null
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -461,6 +478,42 @@ private fun ModeSwitcher(mode: CaptureMode, onMode: (CaptureMode) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * How many stops the preview is from a normal exposure. Tapping it moves the
+ * manual ISO and shutter to a normal exposure.
+ */
+@Composable
+private fun ExposureMeter(ev: Float, onBalance: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = Daybreak.colors
+    val off = kotlin.math.abs(ev)
+    val text = String.format(java.util.Locale.US, "%+.1f EV", ev).replace('-', '−')
+    val hint = when {
+        off < 0.4f -> "balanced"
+        ev < 0 -> if (off >= 9.5f) "far too dark · tap to fix" else "too dark · tap to fix"
+        else -> if (off >= 9.5f) "far too bright · tap to fix" else "too bright · tap to fix"
+    }
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.scrim)
+            .clickable(enabled = off >= 0.4f, onClick = onBalance)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .semantics { contentDescription = "Exposure $text, $hint" },
+        horizontalAlignment = Alignment.End,
+    ) {
+        Text(
+            text = text,
+            style = Daybreak.type.readout,
+            color = when {
+                off < 0.4f -> colors.sun
+                off < 2f -> colors.ink
+                else -> colors.record
+            },
+        )
+        Text(hint, style = Daybreak.type.caption, color = colors.inkMuted)
     }
 }
 

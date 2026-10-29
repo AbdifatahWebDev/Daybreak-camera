@@ -22,7 +22,7 @@
 ## What works in v0.2
 
 - Photo capture with tap to focus, pinch or tap zoom, grid, front and back camera
-- **Pro mode**: manual ISO, shutter speed (1/8000 s to 30 s where the sensor allows), focus distance, white balance presets and exposure compensation, with live readouts of what auto exposure chose
+- **Pro mode**: manual ISO, shutter speed (1/8000 s to 30 s where the sensor allows), focus distance, white balance presets and exposure compensation, with live readouts of what auto exposure chose, an exposure meter that balances manual ISO and shutter with one tap, and one-tap Auto
 - Photos saved as **HEIC** (hardware HEVC encoder, shows in every gallery; the default) or **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) in `DCIM/Daybreak`
 - **RAW + DNG** on cameras that support it: the DNG sits next to the photo and the library shows them as one
 - Live **histogram** and a **level** that turns gold when the phone is straight

@@ -57,6 +57,7 @@ fun ProControlBar(
     live: LiveExposure,
     selected: ProControl?,
     onSelect: (ProControl?) -> Unit,
+    onAllAuto: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -65,6 +66,15 @@ fun ProControlBar(
             .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // One tap back to fully automatic.
+        ProValue(
+            label = "All",
+            value = "Auto",
+            manual = !pro.allAuto,
+            selected = false,
+            enabled = !pro.allAuto,
+            onClick = onAllAuto,
+        )
         ProControl.entries.forEach { control ->
             val (value, manual) = displayValue(control, pro, capabilities, live)
             val enabled = isAvailable(control, pro, capabilities)

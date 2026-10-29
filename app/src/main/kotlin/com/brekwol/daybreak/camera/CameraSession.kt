@@ -99,6 +99,10 @@ class CameraSession(context: Context) {
     /** 64 brightness bins scaled to 0..1, or null when there is no histogram. */
     val histogram: StateFlow<FloatArray?> = _histogram.asStateFlow()
 
+    private val _meter = MutableStateFlow<Float?>(null)
+    /** Stops between the preview's average brightness and mid-grey; null without frames to measure. */
+    val meter: StateFlow<Float?> = _meter.asStateFlow()
+
     private val _live = MutableStateFlow(LiveExposure())
     /** ISO, shutter and focus the camera is using right now. */
     val live: StateFlow<LiveExposure> = _live.asStateFlow()
@@ -198,7 +202,10 @@ class CameraSession(context: Context) {
                     .setResolutionSelector(analysisResolution)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                    .also { it.setAnalyzer(analysisExecutor, HistogramAnalyzer { bins -> _histogram.value = bins }) }
+                    .also { it.setAnalyzer(analysisExecutor, HistogramAnalyzer { bins, ev ->
+                        _histogram.value = bins
+                        _meter.value = ev
+                    }) }
             } else {
                 null
             }
@@ -223,7 +230,10 @@ class CameraSession(context: Context) {
             imageCapture = capture
             imageAnalysis = if (withHistogram) analysis else null
             rawActive = useRaw
-            if (!withHistogram) _histogram.value = null
+            if (!withHistogram) {
+                _histogram.value = null
+                _meter.value = null
+            }
             bound.cameraInfo.zoomState.also {
                 zoomSource = it
                 it.observe(owner, zoomObserver)

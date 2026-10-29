@@ -32,7 +32,54 @@ data class ProSettings(
     val manualExposure: Boolean
         get() = iso != null || shutterNs != null
 
+    /** Nothing is set by hand. */
+    val allAuto: Boolean
+        get() = iso == null && shutterNs == null && focusDiopters == null &&
+            whiteBalance == WhiteBalance.Auto && evIndex == 0
+
+    /**
+     * Manual ISO and shutter changed to bring the exposure [meterEv] stops back to
+     * normal. A value set by hand stays when the other one can make up the
+     * difference; with both set, the shutter moves first (down to 1/4 s, still
+     * sharp handheld) and ISO makes up the rest. Values snap to the camera's stops.
+     */
+    fun balanced(meterEv: Float, caps: CameraCapabilities, live: LiveExposure): ProSettings {
+        if (!manualExposure || kotlin.math.abs(meterEv) < 0.2f) return this
+        val isoStops = caps.isoStops
+        val shutterStops = caps.shutterStops
+        if (isoStops.isEmpty() || shutterStops.isEmpty()) return this
+        val currentIso = (iso ?: live.iso.takeIf { it > 0 } ?: return this).toDouble()
+        val currentShutter = (shutterNs ?: live.shutterNs.takeIf { it > 0 } ?: return this).toDouble()
+        val factor = Math.pow(2.0, -meterEv.toDouble())
+        val shortest = shutterStops.first().toDouble()
+        val longest = minOf(shutterStops.last(), HANDHELD_LIMIT_NS).toDouble().coerceAtLeast(shortest)
+
+        val newShutter: Double
+        val newIso: Double
+        if (iso != null && shutterNs == null) {
+            // ISO was chosen: change the shutter, and ISO only if the shutter runs out.
+            newShutter = (currentShutter * factor).coerceIn(shortest, longest)
+            newIso = (currentIso * factor * currentShutter / newShutter)
+                .coerceIn(isoStops.first().toDouble(), isoStops.last().toDouble())
+        } else if (shutterNs != null && iso == null) {
+            // Shutter was chosen: change ISO, and the shutter only if ISO runs out.
+            newIso = (currentIso * factor).coerceIn(isoStops.first().toDouble(), isoStops.last().toDouble())
+            newShutter = (currentShutter * factor * currentIso / newIso).coerceIn(shortest, longest)
+        } else {
+            newShutter = (currentShutter * factor).coerceIn(shortest, longest)
+            newIso = (currentIso * factor * currentShutter / newShutter)
+                .coerceIn(isoStops.first().toDouble(), isoStops.last().toDouble())
+        }
+        return copy(
+            iso = isoStops.minBy { kotlin.math.abs(kotlin.math.ln(it / newIso)) },
+            shutterNs = shutterStops.minBy { kotlin.math.abs(kotlin.math.ln(it / newShutter)) },
+        )
+    }
+
     companion object {
+        /** Longest shutter speed balancing picks, 1/4 s: slower blurs handheld photos. */
+        const val HANDHELD_LIMIT_NS = 250_000_000L
+
         /** Saves Pro values in the screen's saved state. */
         val Saver: Saver<ProSettings, Any> = listSaver(
             save = { listOf(it.iso, it.shutterNs, it.focusDiopters, it.whiteBalance.name, it.evIndex) },
