@@ -281,7 +281,7 @@ class CameraSession(context: Context) {
     }
 
     /** Sends the Pro settings, or a running burst's exposure, to the camera. */
-    private fun applyCurrent(): ListenableFuture<Void>? {
+    private fun applyCurrent(): ListenableFuture<Void?>? {
         val settings = pro
         val camera = camera ?: return null
         val caps = _state.value.capabilities
@@ -421,7 +421,7 @@ class CameraSession(context: Context) {
     private fun Shot.toBitmap(): Bitmap = bitmap ?: decodeJpeg(jpeg ?: error("Empty frame")).cropTo(crop, full)
 
     /** Waits for the camera to take new settings; a newer change replacing them is fine too. */
-    private suspend fun ListenableFuture<Void>.await() {
+    private suspend fun ListenableFuture<Void?>.await() {
         suspendCancellableCoroutine { continuation ->
             addListener({ continuation.resume(Unit) }, Runnable::run)
         }
