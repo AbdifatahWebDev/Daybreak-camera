@@ -17,13 +17,15 @@
 
 ---
 
-> **Status:** v0.3 "Editor": a non-destructive photo editor and a new share sheet, on top of v0.2's Pro controls and v0.1's capture, JPEG XL saving, library and in-app updates. See the [roadmap](#roadmap).
+> **Status:** v0.4 "Modes", in progress: Night and HDR are in. Video, Scan and Portrait follow. See the [roadmap](#roadmap).
 
-## What works in v0.3
+## What works now
 
 - Photo capture with tap to focus, pinch or tap zoom, grid, front and back camera
 - **Pro mode**: manual ISO, shutter speed (1/8000 s to 30 s where the sensor allows), white balance presets and exposure compensation on ruler dials, with live readouts of what auto exposure chose, an exposure meter that balances manual ISO and shutter with one tap, and one-tap Auto
 - **Focus modes**: Center (keeps focusing on the middle of the frame), Multi (the camera picks) and Manual (a distance dial from close-up to infinity)
+- **Night mode**: takes 6 to 8 short frames, lines them up to cancel hand shake, and merges them, leaving out anything that moved. Noise drops by more than half and dark scenes come out bright without long, blurry exposures
+- **HDR** (Off, Auto or On in Photo mode): merges a quick burst of darker frames, so windows and skies keep their detail while shadows open up. Auto steps in when part of the scene is blown out or the light is low
 - Photos saved as **HEIC** (hardware HEVC encoder, shows in every gallery; the default) or **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) in `DCIM/Daybreak`
 - **RAW + DNG** on cameras that support it: the DNG sits next to the photo and the library shows them as one
 - Live **histogram** and a **level** that turns gold when the phone is straight
@@ -37,7 +39,7 @@
 - Photos keep the right way up even when you point the phone at the sky or the floor
 - Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
-Not in yet: masks, HDR and Night, video and the other modes. They follow the roadmap.
+Not in yet: video, Scan, Portrait and masks. They follow the roadmap.
 
 ## Why Daybreak
 
@@ -56,7 +58,7 @@ Phone cameras capture 10-bit color and HDR, then most apps throw it away by savi
 - Full manual control: ISO, shutter speed, focus, white balance
 - RAW capture with DNG alongside the photo
 - Live histogram, level, focus peaking and zebra highlights
-- HDR and Night frame merging
+- HDR and Night frame merging (done)
 - 4K HEVC 10-bit HDR video
 - Document scanning to PDF and QR code reading
 
@@ -129,7 +131,7 @@ ctest --test-dir build-native
 app/                 Screens (capture, library, viewer, editor, settings) and data (MediaStore, DataStore)
 core/designsystem/   Daybreak colors, type, fonts, icons and shared components
 core/engine/         Kotlin API over the native engine
-native/              C++23 engine: libjxl codec, EXIF, resizing, the photo editor's renderer, JNI bridge, tests
+native/              C++23 engine: libjxl codec, EXIF, resizing, the photo editor's renderer, burst merging, JNI bridge, tests
 docs/                Assets and notes
 ```
 
@@ -143,7 +145,7 @@ More modules (camera, editor, and so on) split out as the app grows.
 | v0.1.1 | In-app updates from GitHub Releases |
 | v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level, focus modes (done) |
 | v0.3 Editor | Light, Color, Curves, Detail, Crop, presets, share sheet (done) |
-| v0.4 Modes | HDR, Night, Portrait, Scan, video recording and trim |
+| v0.4 Modes | HDR and Night (done), video recording and trim, Scan, Portrait |
 | v0.5 Library+ | Albums, search, multi-select, masks, landscape and tablet layouts |
 | v1.0 | Accessibility, translations, release on F-Droid and Google Play |
 

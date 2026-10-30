@@ -27,6 +27,7 @@ add_library(daybreak_core STATIC
   src/image/resize.cpp
   src/meta/exif.cpp
   src/edit/edit.cpp
+  src/burst/burst.cpp
 )
 target_include_directories(daybreak_core PUBLIC include)
 target_link_libraries(daybreak_core PUBLIC jxl jxl_threads)

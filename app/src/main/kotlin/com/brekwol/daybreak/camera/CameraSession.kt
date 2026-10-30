@@ -44,6 +44,17 @@ import androidx.lifecycle.Observer
 import com.brekwol.daybreak.data.CapturedFrame
 import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.data.PhotoRepository
+import com.brekwol.daybreak.engine.BurstMerge
+import com.google.common.util.concurrent.ListenableFuture
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.concurrent.Executors
@@ -122,6 +133,12 @@ class CameraSession(context: Context) {
     @Volatile private var metered: LiveExposure? = null
     @Volatile private var autoExposureOn = true
     @Volatile private var lastLiveMs = 0L
+
+    // Fraction of the last analyzed frame that was blown out, for HDR Auto.
+    @Volatile private var clipped = 0f
+
+    // While a burst is taken, its exposure replaces automatic exposure.
+    @Volatile private var burst: BurstPlan? = null
 
     private val inFlight = AtomicInteger(0)
     /** Photos taken whose image hasn't reached the save queue yet. */
@@ -203,9 +220,10 @@ class CameraSession(context: Context) {
                     .setResolutionSelector(analysisResolution)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                    .also { it.setAnalyzer(analysisExecutor, HistogramAnalyzer { bins, ev ->
+                    .also { it.setAnalyzer(analysisExecutor, HistogramAnalyzer { bins, ev, clippedFraction ->
                         _histogram.value = bins
                         _meter.value = ev
+                        clipped = clippedFraction
                     }) }
             } else {
                 null
@@ -259,14 +277,32 @@ class CameraSession(context: Context) {
     /** Applies Pro settings. [ProSettings] with every value null is fully automatic. */
     fun applyPro(settings: ProSettings) {
         pro = settings
-        val camera = camera ?: return
+        applyCurrent()
+    }
+
+    /** Sends the Pro settings, or a running burst's exposure, to the camera. */
+    private fun applyCurrent(): ListenableFuture<Void>? {
+        val settings = pro
+        val camera = camera ?: return null
         val caps = _state.value.capabilities
         val options = CaptureRequestOptions.Builder()
 
         val isoRange = caps.isoRange
         val shutterRange = caps.shutterRangeNs
-        val manualExposure = settings.manualExposure && caps.manualSensor && isoRange != null && shutterRange != null
-        if (manualExposure && isoRange != null && shutterRange != null) {
+        val plan = burst
+        val burstIso = plan?.iso
+        val burstShutter = plan?.shutterNs
+        val burstManual = burstIso != null && burstShutter != null && caps.manualSensor &&
+            isoRange != null && shutterRange != null
+        val manualExposure = burstManual ||
+            (settings.manualExposure && caps.manualSensor && isoRange != null && shutterRange != null)
+        if (burstManual && burstIso != null && burstShutter != null && isoRange != null && shutterRange != null) {
+            val shutter = burstShutter.coerceIn(shutterRange)
+            options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+            options.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, burstIso.coerceIn(isoRange))
+            options.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
+            options.setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, maxOf(shutter, STEADY_FRAME_NS))
+        } else if (manualExposure && isoRange != null && shutterRange != null) {
             // Keep the metered brightness for whichever of ISO and shutter is still automatic.
             val exposure = metered?.let { it.iso.toDouble() * it.shutterNs } ?: DEFAULT_EXPOSURE
             val iso = (settings.iso ?: (exposure / (settings.shutterNs ?: 1L)).roundToInt())
@@ -296,10 +332,131 @@ class CameraSession(context: Context) {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, settings.whiteBalance.awbMode)
         }
         autoExposureOn = !manualExposure
-        Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build())
+        val applied = Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build())
         if (!manualExposure && caps.exposureCompensation) {
-            camera.cameraControl.setExposureCompensationIndex(settings.evIndex.coerceIn(caps.evRange))
+            val ev = plan?.evIndex ?: settings.evIndex
+            camera.cameraControl.setExposureCompensationIndex(ev.coerceIn(caps.evRange))
         }
+        return applied
+    }
+
+    /** True when HDR Auto should merge a burst: part of the frame is blown out, or it is dim. */
+    fun wantsHdr(): Boolean = clipped >= HDR_AUTO_CLIPPED || (_meter.value ?: 0f) < HDR_AUTO_DARK
+
+    /** The exposure and finishing for a Night or HDR burst taken now. */
+    fun planBurst(kind: BurstKind): BurstPlan =
+        BurstPlanner.plan(kind, _state.value.capabilities, metered ?: _live.value.takeIf { it.iso > 0 }, _meter.value)
+
+    /**
+     * Takes [plan]'s frames and merges them into one photo. [onProgress] gets the
+     * number of frames taken so far. The camera returns to normal exposure as
+     * soon as the last frame is taken, while merging continues.
+     */
+    suspend fun takeBurst(
+        plan: BurstPlan,
+        stem: String,
+        format: PhotoFormat,
+        onProgress: (Int) -> Unit,
+    ): CapturedFrame {
+        val capture = imageCapture ?: throw IllegalStateException("The camera isn't ready yet.")
+        if (rawActive) throw IllegalStateException("Turn RAW off to take Night and HDR photos.")
+        inFlight.incrementAndGet()
+        burst = plan
+        try {
+            runCatching { applyCurrent()?.await() }
+            // Manual exposure applies to the next frame; automatic exposure needs time to settle.
+            delay(if (plan.iso == null && plan.evIndex != null) AE_SETTLE_MS else EXPOSURE_SETTLE_MS)
+            val merge = BurstMerge()
+            try {
+                return coroutineScope {
+                    val shots = Channel<Shot>(capacity = 1)
+                    launch {
+                        try {
+                            repeat(plan.frames) { shots.send(shoot(capture)) }
+                        } finally {
+                            shots.close()
+                            burst = null
+                            applyCurrent()
+                        }
+                    }
+                    var first: Shot? = null
+                    var width = 0
+                    var height = 0
+                    var taken = 0
+                    for (shot in shots) {
+                        taken++
+                        onProgress(taken)
+                        val bitmap = withContext(Dispatchers.Default) { shot.toBitmap() }
+                        try {
+                            if (first == null) {
+                                first = shot
+                                width = bitmap.width
+                                height = bitmap.height
+                            }
+                            // A frame of another size (the camera changed its crop) is left out.
+                            if (bitmap.width == width && bitmap.height == height) {
+                                withContext(Dispatchers.Default) { merge.add(bitmap) }
+                            }
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                    val reference = first ?: throw IllegalStateException("The camera took no frames")
+                    val photo = withContext(Dispatchers.Default) { merge.finish(width, height, plan.finish) }
+                    CapturedFrame(photo, reference.rotation, reference.jpeg, stem, format)
+                }
+            } finally {
+                merge.close()
+            }
+        } finally {
+            burst = null
+            applyCurrent()
+            inFlight.decrementAndGet()
+        }
+    }
+
+    /** One burst frame, copied out of the camera's buffer so the next can be taken. */
+    private class Shot(val jpeg: ByteArray?, val bitmap: Bitmap?, val rotation: Int, val crop: Rect, val full: Rect)
+
+    private fun Shot.toBitmap(): Bitmap = bitmap ?: decodeJpeg(jpeg ?: error("Empty frame")).cropTo(crop, full)
+
+    /** Waits for the camera to take new settings; a newer change replacing them is fine too. */
+    private suspend fun ListenableFuture<Void>.await() {
+        suspendCancellableCoroutine { continuation ->
+            addListener({ continuation.resume(Unit) }, Runnable::run)
+        }
+    }
+
+    private suspend fun shoot(capture: ImageCapture): Shot = suspendCancellableCoroutine { continuation ->
+        capture.takePicture(
+            captureExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val shot = try {
+                        val full = Rect(0, 0, image.width, image.height)
+                        if (image.format == ImageFormat.JPEG) {
+                            val buffer = image.planes[0].buffer
+                            buffer.rewind()
+                            val jpeg = ByteArray(buffer.remaining())
+                            buffer.get(jpeg)
+                            Shot(jpeg, null, image.imageInfo.rotationDegrees, Rect(image.cropRect), full)
+                        } else {
+                            Shot(null, image.toBitmap(), image.imageInfo.rotationDegrees, full, full)
+                        }
+                    } catch (error: Exception) {
+                        image.close()
+                        continuation.resumeWithException(error)
+                        return
+                    }
+                    image.close()
+                    continuation.resume(shot)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    continuation.resumeWithException(exception)
+                }
+            },
+        )
     }
 
     /** Tap to focus and meter at a point of the preview. Returns false when everything is manual. */
@@ -470,6 +627,10 @@ class CameraSession(context: Context) {
     private companion object {
         const val LIVE_INTERVAL_MS = 150L
         const val STEADY_FRAME_NS = 33_333_333L
+        const val EXPOSURE_SETTLE_MS = 150L
+        const val AE_SETTLE_MS = 700L
+        const val HDR_AUTO_CLIPPED = 0.005f
+        const val HDR_AUTO_DARK = -1.5f
         const val MAX_SHUTTER_NS = 30_000_000_000L
         // ISO 400 at 1/100 s, used before anything was metered.
         const val DEFAULT_EXPOSURE = 400.0 * 10_000_000L

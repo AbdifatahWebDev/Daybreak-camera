@@ -17,6 +17,26 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
+/** When Photo mode merges a burst for more range in bright and dark areas. */
+enum class HdrMode(val key: String, val label: String) {
+    Off("off", "Off"),
+    Auto("auto", "Auto"),
+    On("on", "On"),
+    ;
+
+    /** The next mode when the HDR button is tapped. */
+    val next: HdrMode
+        get() = when (this) {
+            Auto -> On
+            On -> Off
+            Off -> Auto
+        }
+
+    companion object {
+        fun fromKey(key: String?): HdrMode = entries.firstOrNull { it.key == key } ?: Auto
+    }
+}
+
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 data class DaybreakSettings(
@@ -30,6 +50,7 @@ data class DaybreakSettings(
     val effort: Int = 7,
     val lossless: Boolean = false,
     val grid: Boolean = true,
+    val hdr: HdrMode = HdrMode.Auto,
     /** Look for a new version on GitHub once a day (GitHub builds only). */
     val updateAutoCheck: Boolean = true,
     /** Download a new version in the background when on Wi-Fi. */
@@ -59,6 +80,7 @@ class SettingsRepository(context: Context) {
         val effort = intPreferencesKey("jxl_effort")
         val lossless = booleanPreferencesKey("jxl_lossless")
         val grid = booleanPreferencesKey("grid")
+        val hdr = stringPreferencesKey("hdr")
         val updateAutoCheck = booleanPreferencesKey("update_auto_check")
         val updateAutoDownload = booleanPreferencesKey("update_auto_download")
         val updatePreReleases = booleanPreferencesKey("update_pre_releases")
@@ -81,6 +103,7 @@ class SettingsRepository(context: Context) {
                 effort = prefs[Keys.effort] ?: 7,
                 lossless = prefs[Keys.lossless] ?: false,
                 grid = prefs[Keys.grid] ?: true,
+                hdr = HdrMode.fromKey(prefs[Keys.hdr]),
                 updateAutoCheck = prefs[Keys.updateAutoCheck] ?: true,
                 updateAutoDownload = prefs[Keys.updateAutoDownload] ?: true,
                 updatePreReleases = prefs[Keys.updatePreReleases] ?: false,
@@ -122,6 +145,10 @@ class SettingsRepository(context: Context) {
 
     suspend fun setGrid(value: Boolean) {
         store.edit { it[Keys.grid] = value }
+    }
+
+    suspend fun setHdr(value: HdrMode) {
+        store.edit { it[Keys.hdr] = value.key }
     }
 
     suspend fun setUpdateAutoCheck(value: Boolean) {

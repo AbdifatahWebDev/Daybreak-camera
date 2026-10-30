@@ -7,10 +7,13 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <new>
+#include <span>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "daybreak/burst.hpp"
 #include "daybreak/edit.hpp"
 #include "daybreak/engine.hpp"
 
@@ -305,4 +308,104 @@ Java_com_brekwol_daybreak_engine_NativeEngine_renderEdit(JNIEnv* env, jobject /*
   AndroidBitmap_unlockPixels(env, destination);
   AndroidBitmap_unlockPixels(env, source);
   if (!result) throw_java(env, "java/lang/IllegalStateException", result.error().message);
+}
+
+// ------------------------------------------------------------------ bursts
+
+namespace {
+
+daybreak::BurstMerger* merger_of(jlong handle) { return reinterpret_cast<daybreak::BurstMerger*>(handle); }
+
+// Locks an ARGB_8888 bitmap for the duration of [use]; throws a Java exception on failure.
+template <typename Use>
+bool with_bitmap(JNIEnv* env, jobject bitmap, Use&& use) {
+  AndroidBitmapInfo info{};
+  if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+    throw_java(env, "java/lang/IllegalArgumentException", "Could not read the bitmap");
+    return false;
+  }
+  if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) {
+    throw_java(env, "java/lang/IllegalArgumentException", "Bitmap must be ARGB_8888");
+    return false;
+  }
+  void* pixels = nullptr;
+  if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS) {
+    throw_java(env, "java/lang/IllegalStateException", "Could not lock the bitmap");
+    return false;
+  }
+  const std::span<std::uint8_t> span(static_cast<std::uint8_t*>(pixels), std::size_t{info.stride} * info.height);
+  std::string error;
+  try {
+    error = use(span, info);
+  } catch (const std::bad_alloc&) {
+    error = "out of memory";
+  }
+  AndroidBitmap_unlockPixels(env, bitmap);
+  if (error == "out of memory") {
+    throw_java(env, "java/lang/OutOfMemoryError", "Not enough memory to merge the photos");
+    return false;
+  }
+  if (!error.empty()) {
+    throw_java(env, "java/lang/IllegalStateException", error);
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_burstCreate(JNIEnv* env, jobject /* this */) {
+  try {
+    return reinterpret_cast<jlong>(new daybreak::BurstMerger());
+  } catch (const std::bad_alloc&) {
+    throw_java(env, "java/lang/OutOfMemoryError", "Not enough memory to merge the photos");
+    return 0;
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_burstAdd(JNIEnv* env, jobject /* this */, jlong handle, jobject frame) {
+  auto* merger = merger_of(handle);
+  if (merger == nullptr) {
+    throw_java(env, "java/lang/IllegalStateException", "The burst is closed");
+    return;
+  }
+  with_bitmap(env, frame, [&](std::span<std::uint8_t> pixels, const AndroidBitmapInfo& info) -> std::string {
+    const daybreak::RgbaView view{std::span<const std::uint8_t>(pixels.data(), pixels.size()), info.width,
+                                  info.height, info.stride};
+    const auto result = merger->add(view);
+    return result ? std::string() : result.error().message;
+  });
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_burstFrames(JNIEnv* /* env */, jobject /* this */, jlong handle) {
+  auto* merger = merger_of(handle);
+  return merger == nullptr ? 0 : static_cast<jint>(merger->frames());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_burstFinish(JNIEnv* env, jobject /* this */, jlong handle,
+                                                          jobject destination, jfloat gain, jfloat under,
+                                                          jfloat over) {
+  auto* merger = merger_of(handle);
+  if (merger == nullptr) {
+    throw_java(env, "java/lang/IllegalStateException", "The burst is closed");
+    return;
+  }
+  with_bitmap(env, destination, [&](std::span<std::uint8_t> pixels, const AndroidBitmapInfo& info) -> std::string {
+    daybreak::BurstFinish finish;
+    finish.gain = gain;
+    finish.under = under;
+    finish.over = over;
+    const daybreak::MutableRgbaView view{pixels, info.width, info.height, info.stride};
+    const auto result = merger->finish(finish, view);
+    return result ? std::string() : result.error().message;
+  });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_brekwol_daybreak_engine_NativeEngine_burstRelease(JNIEnv* /* env */, jobject /* this */, jlong handle) {
+  delete merger_of(handle);
 }

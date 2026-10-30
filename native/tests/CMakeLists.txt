@@ -9,7 +9,7 @@ FetchContent_Declare(
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-add_executable(daybreak_engine_tests engine_test.cpp edit_test.cpp)
+add_executable(daybreak_engine_tests engine_test.cpp edit_test.cpp burst_test.cpp)
 target_link_libraries(daybreak_engine_tests PRIVATE daybreak_core GTest::gtest_main)
 target_compile_options(daybreak_engine_tests PRIVATE -Wall -Wextra)
 

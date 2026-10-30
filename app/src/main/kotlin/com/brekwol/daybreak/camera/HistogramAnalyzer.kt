@@ -11,10 +11,11 @@ import kotlin.math.sqrt
  * Builds a 64-bin brightness histogram from the luma plane of small preview
  * frames, about ten times a second. Bins are square-root scaled so the tallest is 1.
  * It also meters the frame: how many stops the average brightness is from
- * mid-grey, which is what a normal exposure aims for.
+ * mid-grey, which is what a normal exposure aims for, and what fraction of it
+ * is blown out (which tells HDR Auto when to step in).
  */
 class HistogramAnalyzer(
-    private val onFrame: (histogram: FloatArray, meterEv: Float) -> Unit,
+    private val onFrame: (histogram: FloatArray, meterEv: Float, clipped: Float) -> Unit,
 ) : ImageAnalysis.Analyzer {
     private var lastMs = 0L
     private val bins = IntArray(BINS)
@@ -33,6 +34,7 @@ class HistogramAnalyzer(
             bins.fill(0)
             var linearSum = 0.0
             var samples = 0
+            var clipped = 0
             var y = 0
             while (y < image.height) {
                 val row = y * rowStride
@@ -42,6 +44,7 @@ class HistogramAnalyzer(
                     if (index >= limit) break
                     val luma = buffer.get(index).toInt() and 0xFF
                     bins[luma shr 2]++
+                    if (luma >= CLIPPED) clipped++
                     linearSum += LINEAR[luma]
                     samples++
                     x += SAMPLE_STEP
@@ -56,7 +59,8 @@ class HistogramAnalyzer(
             val mean = if (samples > 0) linearSum / samples else 0.0
             val meterEv = (ln(mean.coerceAtLeast(1e-6) / MID_GREY) / ln(2.0)).toFloat()
                 .coerceIn(-METER_RANGE, METER_RANGE)
-            onFrame(FloatArray(BINS) { sqrt(bins[it].toFloat()) / top }, meterEv)
+            val clippedFraction = if (samples > 0) clipped.toFloat() / samples else 0f
+            onFrame(FloatArray(BINS) { sqrt(bins[it].toFloat()) / top }, meterEv, clippedFraction)
         } finally {
             image.close()
         }
@@ -68,6 +72,7 @@ class HistogramAnalyzer(
         const val INTERVAL_MS = 100L
         const val MID_GREY = 0.18
         const val METER_RANGE = 10f
+        const val CLIPPED = 250
 
         /** sRGB-encoded luma to linear light. */
         val LINEAR = DoubleArray(256) { i ->

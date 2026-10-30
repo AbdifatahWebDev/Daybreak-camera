@@ -40,4 +40,14 @@ internal object NativeEngine {
         fullLongSide: Int,
         applyCrop: Boolean,
     )
+
+    external fun burstCreate(): Long
+
+    external fun burstAdd(handle: Long, frame: Bitmap)
+
+    external fun burstFrames(handle: Long): Int
+
+    external fun burstFinish(handle: Long, destination: Bitmap, gain: Float, under: Float, over: Float)
+
+    external fun burstRelease(handle: Long)
 }

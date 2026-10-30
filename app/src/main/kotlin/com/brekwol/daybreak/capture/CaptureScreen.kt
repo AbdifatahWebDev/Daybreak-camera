@@ -71,11 +71,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.brekwol.daybreak.camera.BurstKind
 import com.brekwol.daybreak.camera.CameraSession
 import com.brekwol.daybreak.camera.FocusMode
 import com.brekwol.daybreak.camera.ProSettings
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DaybreakSettings
+import com.brekwol.daybreak.data.HdrMode
 import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.data.SaveQueue
 import com.brekwol.daybreak.designsystem.Daybreak
@@ -174,17 +176,21 @@ private fun CameraContent(
 
     val settingsLoaded = loadedSettings != null
     // Frames are always analyzed (for the exposure meter); the setting only shows the graph.
-    LaunchedEffect(settingsLoaded, backCamera, settings.raw, lifecycleOwner) {
+    // Night photos are merged from in-memory frames, so Night mode runs without RAW.
+    val useRaw = settings.raw && mode != CaptureMode.Night
+    LaunchedEffect(settingsLoaded, backCamera, useRaw, lifecycleOwner) {
         if (settingsLoaded) {
             session.bind(
                 owner = lifecycleOwner,
                 surfaceProvider = previewView.surfaceProvider,
                 backCamera = backCamera,
-                raw = settings.raw,
+                raw = useRaw,
                 histogram = true,
             )
         }
     }
+    // Frames taken and merging state of a Night or HDR burst, or null.
+    var burstProgress by remember { mutableStateOf<BurstProgress?>(null) }
     val meter = session.meter.collectAsStateWithLifecycle()
     // Dials change values many times a second; the camera gets at most about 20
     // updates a second (always the newest), so the viewfinder doesn't stutter.
@@ -232,6 +238,7 @@ private fun CameraContent(
     val flash = remember { Animatable(0f) }
 
     fun capture() {
+        if (burstProgress != null) return
         val waiting = container.saveQueue.pending.value + session.capturesInFlight
         if (waiting >= SaveQueue.MAX_PENDING) {
             Toast.makeText(context, "Still saving, one moment", Toast.LENGTH_SHORT).show()
@@ -241,6 +248,34 @@ private fun CameraContent(
         scope.launch {
             flash.snapTo(0.7f)
             flash.animateTo(0f, tween(durationMillis = 180))
+        }
+        val burstKind = when {
+            mode == CaptureMode.Night -> BurstKind.Night
+            mode == CaptureMode.Photo && !camera.rawActive && (
+                settings.hdr == HdrMode.On || (settings.hdr == HdrMode.Auto && session.wantsHdr())
+            ) -> BurstKind.Hdr
+            else -> null
+        }
+        if (burstKind != null) {
+            val plan = session.planBurst(burstKind)
+            burstProgress = BurstProgress(plan.kind, taken = 0, total = plan.frames)
+            scope.launch {
+                try {
+                    val frame = session.takeBurst(plan, container.photos.newStem(), settings.format) { taken ->
+                        burstProgress = BurstProgress(plan.kind, taken = taken, total = plan.frames)
+                    }
+                    container.saveQueue.submit(frame)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    container.saveQueue.reportError(error.message ?: "Could not take the photo")
+                } catch (tooBig: OutOfMemoryError) {
+                    container.saveQueue.reportError("Not enough memory to merge the photos")
+                } finally {
+                    burstProgress = null
+                }
+            }
+            return
         }
         session.takePicture(
             stem = container.photos.newStem(),
@@ -287,6 +322,20 @@ private fun CameraContent(
                     modifier = Modifier.semantics {
                         contentDescription = if (settings.raw) "RAW on" else "RAW off"
                     },
+                )
+            }
+            if (mode == CaptureMode.Photo && !useRaw) {
+                Spacer(Modifier.width(6.dp))
+                DaybreakChip(
+                    text = when (settings.hdr) {
+                        HdrMode.Auto -> "HDR A"
+                        HdrMode.On -> "HDR"
+                        HdrMode.Off -> "HDR off"
+                    },
+                    selected = settings.hdr == HdrMode.On,
+                    mono = true,
+                    onClick = { scope.launch { container.settings.setHdr(settings.hdr.next) } },
+                    modifier = Modifier.semantics { contentDescription = "HDR ${settings.hdr.label}" },
                 )
             }
             Spacer(Modifier.weight(1f))
@@ -403,6 +452,23 @@ private fun CameraContent(
                         .padding(bottom = 16.dp),
                 )
             }
+            if (mode == CaptureMode.Night && burstProgress == null && camera.ready) {
+                val seconds = ((session.planBurst(BurstKind.Night).captureMs + 500) / 1000).coerceAtLeast(1)
+                Text(
+                    text = "Night · hold still about $seconds s",
+                    style = Daybreak.type.caption,
+                    color = colors.ink,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 12.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(colors.scrim)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+            burstProgress?.let { progress ->
+                BurstOverlay(progress, Modifier.align(Alignment.Center))
+            }
             Box(
                 Modifier
                     .fillMaxSize()
@@ -445,7 +511,7 @@ private fun CameraContent(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             LastPhotoButton(thumbnail = thumbnail, pending = pending, onClick = onOpenLibrary)
-            ShutterButton(onClick = ::capture, enabled = camera.ready)
+            ShutterButton(onClick = ::capture, enabled = camera.ready && burstProgress == null)
             DaybreakIconButton(
                 iconRes = DsR.drawable.ic_flip,
                 contentDescription = if (backCamera) "Switch to front camera" else "Switch to back camera",
@@ -458,6 +524,59 @@ private fun CameraContent(
 }
 
 private const val APPLY_INTERVAL_MS = 50L
+
+/** How far a Night or HDR burst has got. */
+private data class BurstProgress(val kind: BurstKind, val taken: Int, val total: Int) {
+    val merging: Boolean get() = taken >= total
+}
+
+/** "Hold still" with a ring that fills as frames are taken, then "Merging…". */
+@Composable
+private fun BurstOverlay(progress: BurstProgress, modifier: Modifier = Modifier) {
+    val colors = Daybreak.colors
+    val fraction = if (progress.total > 0) progress.taken.toFloat() / progress.total else 0f
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(colors.scrim)
+            .padding(horizontal = 20.dp, vertical = 14.dp)
+            .semantics {
+                contentDescription = if (progress.merging) "Merging the photo" else "Hold still, frame ${progress.taken} of ${progress.total}"
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val stroke = 4.dp.toPx()
+                drawCircle(colors.line, radius = size.minDimension / 2f - stroke / 2f, style = Stroke(stroke))
+                drawArc(
+                    color = colors.sun,
+                    startAngle = -90f,
+                    sweepAngle = 360f * fraction,
+                    useCenter = false,
+                    topLeft = Offset(stroke / 2f, stroke / 2f),
+                    size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                    style = Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+                )
+            }
+            Text(
+                if (progress.merging) "…" else "${progress.taken}/${progress.total}",
+                style = Daybreak.type.readout,
+                color = colors.ink,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            when {
+                progress.merging -> "Merging…"
+                progress.kind == BurstKind.Night -> "Hold still"
+                else -> "HDR · hold still"
+            },
+            style = Daybreak.type.label,
+            color = colors.ink,
+        )
+    }
+}
 
 @Composable
 private fun ModeSwitcher(mode: CaptureMode, onMode: (CaptureMode) -> Unit) {
