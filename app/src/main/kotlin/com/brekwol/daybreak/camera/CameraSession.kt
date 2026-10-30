@@ -1,5 +1,17 @@
 package com.brekwol.daybreak.camera
 
+import android.annotation.SuppressLint
+import android.net.Uri
+import androidx.camera.core.DynamicRange
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
+import androidx.core.content.ContextCompat
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -80,6 +92,14 @@ data class CameraState(
     val minZoom: Float = 1f,
     val maxZoom: Float = 1f,
     val error: String? = null,
+    /** Bound for video: the shutter records. */
+    val videoActive: Boolean = false,
+    /** What this camera can record. */
+    val videoUhdSupported: Boolean = false,
+    val videoHdrSupported: Boolean = false,
+    /** What the bound video use case records, e.g. "4K" and HDR on. */
+    val videoQuality: String = "",
+    val videoHdrActive: Boolean = false,
 ) {
     /** Zoom presets for the pill: ultra-wide when present, 1×, 2×, 5×. */
     val zoomOptions: List<Float>
@@ -90,6 +110,12 @@ data class CameraState(
             if (maxZoom >= 5f) add(5f)
         }
 }
+
+/** How video is recorded: 4K (else 1080p) and HDR (10-bit HLG, else SDR), where the camera can. */
+data class VideoOptions(val uhd: Boolean = true, val hdr: Boolean = false)
+
+/** A recording in progress. */
+data class RecordingInfo(val durationMs: Long = 0L)
 
 /**
  * Owns the camera: Preview, ImageCapture and (for the histogram) ImageAnalysis,
@@ -122,6 +148,12 @@ class CameraSession(context: Context) {
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
+    private var videoCapture: VideoCapture<Recorder>? = null
+    private var recording: Recording? = null
+
+    private val _recording = MutableStateFlow<RecordingInfo?>(null)
+    /** The recording in progress, or null. */
+    val recordingState: StateFlow<RecordingInfo?> = _recording.asStateFlow()
     private var imageAnalysis: ImageAnalysis? = null
     private var rawActive = false
     private var pro = ProSettings()
@@ -156,6 +188,8 @@ class CameraSession(context: Context) {
     private val orientation = OrientationTracker(this.context) { rotation ->
         targetRotation = rotation
         imageCapture?.setTargetRotation(rotation)
+        // A recording keeps the rotation it started with.
+        if (recording == null) videoCapture?.targetRotation = rotation
     }.also { it.start() }
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -186,7 +220,9 @@ class CameraSession(context: Context) {
         backCamera: Boolean,
         raw: Boolean,
         histogram: Boolean,
+        video: VideoOptions? = null,
     ) {
+        if (recording != null) return
         try {
             val provider = provider ?: ProcessCameraProvider.awaitInstance(context).also { provider = it }
             val selector = if (backCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
@@ -213,7 +249,31 @@ class CameraSession(context: Context) {
                 )
             if (useRaw) captureBuilder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)
             targetRotation?.let { captureBuilder.setTargetRotation(it) }
-            val capture = captureBuilder.build()
+            val capture = if (video == null) captureBuilder.build() else null
+
+            // Video: 4K or 1080p, HDR when asked for and the camera can, stabilized when it can.
+            val videoCapabilities = runCatching { Recorder.getVideoCapabilities(info) }.getOrNull()
+            val hdrSupported = videoCapabilities?.supportedDynamicRanges?.contains(DynamicRange.HLG_10_BIT) == true
+            val uhdSupported = videoCapabilities?.getSupportedQualities(DynamicRange.SDR)?.contains(Quality.UHD) == true
+            var videoQuality = ""
+            var videoHdr = false
+            val videoUseCase = if (video != null) {
+                videoHdr = video.hdr && hdrSupported
+                val range = if (videoHdr) DynamicRange.HLG_10_BIT else DynamicRange.SDR
+                val qualities = videoCapabilities?.getSupportedQualities(range).orEmpty()
+                val wanted = if (video.uhd && Quality.UHD in qualities) Quality.UHD else Quality.FHD
+                videoQuality = if (wanted == Quality.UHD) "4K" else "1080p"
+                val recorder = Recorder.Builder()
+                    .setQualitySelector(QualitySelector.from(wanted, FallbackStrategy.lowerQualityOrHigherThan(wanted)))
+                    .build()
+                val builder = VideoCapture.Builder(recorder).setDynamicRange(range)
+                if (videoCapabilities?.isStabilizationSupported == true) builder.setVideoStabilizationEnabled(true)
+                targetRotation?.let { builder.setTargetRotation(it) }
+                builder.build()
+            } else {
+                null
+            }
+            val main: UseCase = capture ?: videoUseCase ?: error("Nothing to bind")
 
             val analysis = if (histogram) {
                 ImageAnalysis.Builder()
@@ -233,20 +293,21 @@ class CameraSession(context: Context) {
             imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
             var withHistogram = analysis != null
-            val useCases: List<UseCase> = listOfNotNull(preview, capture, analysis)
+            val useCases: List<UseCase> = listOfNotNull(preview, main, analysis)
             val bound = try {
                 provider.bindToLifecycle(owner, selector, *useCases.toTypedArray())
             } catch (unsupported: IllegalArgumentException) {
-                // Some cameras can't stream preview, photo and analysis (or RAW) together.
+                // Some cameras can't stream preview, photo or video, and analysis (or RAW) together.
                 if (analysis == null) throw unsupported
                 analysis.clearAnalyzer()
                 withHistogram = false
                 provider.unbindAll()
-                provider.bindToLifecycle(owner, selector, preview, capture)
+                provider.bindToLifecycle(owner, selector, preview, main)
             }
 
             camera = bound
             imageCapture = capture
+            videoCapture = videoUseCase
             imageAnalysis = if (withHistogram) analysis else null
             rawActive = useRaw
             if (!withHistogram) {
@@ -266,6 +327,11 @@ class CameraSession(context: Context) {
                 zoomRatio = bound.cameraInfo.zoomState.value?.zoomRatio ?: 1f,
                 minZoom = bound.cameraInfo.zoomState.value?.minZoomRatio ?: 1f,
                 maxZoom = bound.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f,
+                videoActive = videoUseCase != null,
+                videoUhdSupported = uhdSupported,
+                videoHdrSupported = hdrSupported,
+                videoQuality = videoQuality,
+                videoHdrActive = videoHdr,
             )
             applyPro(pro)
         } catch (error: Exception) {
@@ -565,14 +631,63 @@ class CameraSession(context: Context) {
         )
     }
 
+    /**
+     * Starts recording a video into DCIM/Daybreak. [onSaved] gets the new video's
+     * address when recording stops; [withAudio] needs the microphone permission.
+     */
+    @SuppressLint("MissingPermission")
+    fun startRecording(
+        stem: String,
+        photos: PhotoRepository,
+        withAudio: Boolean,
+        onSaved: (Uri) -> Unit,
+        onError: (String) -> Unit,
+    ): Boolean {
+        val video = videoCapture ?: return false
+        if (recording != null) return false
+        val output = MediaStoreOutputOptions.Builder(resolver, photos.videosCollection)
+            .setContentValues(photos.videoValues(stem))
+            .build()
+        var pending = video.output.prepareRecording(context, output)
+        if (withAudio) pending = pending.withAudioEnabled()
+        _recording.value = RecordingInfo()
+        recording = pending.start(ContextCompat.getMainExecutor(context)) { event ->
+            when (event) {
+                is VideoRecordEvent.Status ->
+                    _recording.value = RecordingInfo(event.recordingStats.recordedDurationNanos / 1_000_000L)
+                is VideoRecordEvent.Finalize -> {
+                    recording = null
+                    _recording.value = null
+                    val uri = event.outputResults.outputUri
+                    val kept = uri != Uri.EMPTY && event.error in KEPT_ERRORS
+                    if (kept) onSaved(uri)
+                    when {
+                        !kept -> onError(event.cause?.message ?: "The video could not be saved")
+                        event.error == VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE ->
+                            onError("The phone ran out of space; the video was saved up to there")
+                    }
+                }
+                else -> Unit
+            }
+        }
+        return true
+    }
+
+    fun stopRecording() {
+        recording?.stop()
+    }
+
     /** Closes the camera and stops background work. */
     fun release() {
+        recording?.stop()
+        recording = null
         orientation.stop()
         zoomSource?.removeObserver(zoomObserver)
         imageAnalysis?.clearAnalyzer()
         runCatching { provider?.unbindAll() }
         camera = null
         imageCapture = null
+        videoCapture = null
         imageAnalysis = null
         captureExecutor.shutdown()
         analysisExecutor.shutdown()
@@ -627,6 +742,15 @@ class CameraSession(context: Context) {
     private companion object {
         const val LIVE_INTERVAL_MS = 150L
         const val STEADY_FRAME_NS = 33_333_333L
+
+        /** Recording ends that still leave a playable video. */
+        val KEPT_ERRORS = setOf(
+            VideoRecordEvent.Finalize.ERROR_NONE,
+            VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE,
+            VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED,
+            VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED,
+            VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE,
+        )
         const val EXPOSURE_SETTLE_MS = 150L
         const val AE_SETTLE_MS = 700L
         const val HDR_AUTO_CLIPPED = 0.005f

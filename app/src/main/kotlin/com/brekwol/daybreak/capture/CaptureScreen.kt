@@ -63,6 +63,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -73,11 +74,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.brekwol.daybreak.camera.BurstKind
 import com.brekwol.daybreak.camera.CameraSession
+import com.brekwol.daybreak.camera.VideoOptions
 import com.brekwol.daybreak.camera.FocusMode
 import com.brekwol.daybreak.camera.ProSettings
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DaybreakSettings
 import com.brekwol.daybreak.data.HdrMode
+import com.brekwol.daybreak.data.formatDuration
 import com.brekwol.daybreak.data.PhotoFormat
 import com.brekwol.daybreak.data.SaveQueue
 import com.brekwol.daybreak.designsystem.Daybreak
@@ -177,8 +180,9 @@ private fun CameraContent(
     val settingsLoaded = loadedSettings != null
     // Frames are always analyzed (for the exposure meter); the setting only shows the graph.
     // Night photos are merged from in-memory frames, so Night mode runs without RAW.
-    val useRaw = settings.raw && mode != CaptureMode.Night
-    LaunchedEffect(settingsLoaded, backCamera, useRaw, lifecycleOwner) {
+    val useRaw = settings.raw && mode != CaptureMode.Night && mode != CaptureMode.Video
+    val videoOptions = if (mode == CaptureMode.Video) VideoOptions(settings.videoUhd, settings.videoHdr) else null
+    LaunchedEffect(settingsLoaded, backCamera, useRaw, videoOptions, lifecycleOwner) {
         if (settingsLoaded) {
             session.bind(
                 owner = lifecycleOwner,
@@ -186,7 +190,31 @@ private fun CameraContent(
                 backCamera = backCamera,
                 raw = useRaw,
                 histogram = true,
+                video = videoOptions,
             )
+        }
+    }
+    val recordingInfo by session.recordingState.collectAsStateWithLifecycle()
+    val recordingNow = recordingInfo != null
+    // Bumped when a video is saved, so the thumbnail shows it.
+    var videosSaved by remember { mutableStateOf(0) }
+
+    // The microphone is asked for once, the first time Video mode opens.
+    var audioAllowed by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    var audioAsked by rememberSaveable { mutableStateOf(false) }
+    val audioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        audioAllowed = granted
+        if (!granted) Toast.makeText(context, "Videos will be recorded without sound", Toast.LENGTH_LONG).show()
+    }
+    LaunchedEffect(mode) {
+        if (mode == CaptureMode.Video && !audioAllowed && !audioAsked) {
+            audioAsked = true
+            audioLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
     // Frames taken and merging state of a Night or HDR burst, or null.
@@ -211,8 +239,8 @@ private fun CameraContent(
     }
 
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(lastSaved) {
-        val photo = lastSaved ?: container.photos.list().firstOrNull()
+    LaunchedEffect(lastSaved, videosSaved) {
+        val photo = (if (videosSaved > 0) null else lastSaved) ?: container.photos.list(includeVideos = true).firstOrNull()
         thumbnail = photo?.let { container.thumbnails.load(it, 160) }
     }
     LaunchedEffect(Unit) {
@@ -237,7 +265,30 @@ private fun CameraContent(
     }
     val flash = remember { Animatable(0f) }
 
+    fun record() {
+        if (recordingNow) {
+            session.stopRecording()
+            return
+        }
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        val started = session.startRecording(
+            stem = container.photos.newStem(),
+            photos = container.photos,
+            withAudio = audioAllowed,
+            onSaved = {
+                container.photos.notifyChanged()
+                videosSaved++
+            },
+            onError = { message -> container.saveQueue.reportError(message) },
+        )
+        if (!started) Toast.makeText(context, "The camera isn't ready yet", Toast.LENGTH_SHORT).show()
+    }
+
     fun capture() {
+        if (mode == CaptureMode.Video) {
+            record()
+            return
+        }
         if (burstProgress != null) return
         val waiting = container.saveQueue.pending.value + session.capturesInFlight
         if (waiting >= SaveQueue.MAX_PENDING) {
@@ -301,18 +352,27 @@ private fun CameraContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val jxlLossless = settings.format == PhotoFormat.Jxl && settings.lossless
-            FormatBadge(
-                format = if (settings.format == PhotoFormat.Heic && !container.heic.isSupported) {
-                    PhotoFormat.Jxl.badge
-                } else {
-                    settings.format.badge
-                },
-                detail = if (jxlLossless) "Lossless" else "Q${settings.quality}",
-                detailColor = if (jxlLossless) colors.focus else colors.inkMuted,
-                onClick = onOpenSettings,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-            if (camera.capabilities.raw) {
+            if (mode == CaptureMode.Video) {
+                FormatBadge(
+                    format = if (camera.videoHdrActive) "HEVC" else "MP4",
+                    detail = if (camera.videoHdrActive) "10-bit" else "",
+                    onClick = onOpenSettings,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            } else {
+                FormatBadge(
+                    format = if (settings.format == PhotoFormat.Heic && !container.heic.isSupported) {
+                        PhotoFormat.Jxl.badge
+                    } else {
+                        settings.format.badge
+                    },
+                    detail = if (jxlLossless) "Lossless" else "Q${settings.quality}",
+                    detailColor = if (jxlLossless) colors.focus else colors.inkMuted,
+                    onClick = onOpenSettings,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            if (camera.capabilities.raw && mode != CaptureMode.Video) {
                 Spacer(Modifier.width(6.dp))
                 DaybreakChip(
                     text = "RAW",
@@ -323,6 +383,34 @@ private fun CameraContent(
                         contentDescription = if (settings.raw) "RAW on" else "RAW off"
                     },
                 )
+            }
+            if (mode == CaptureMode.Video && camera.videoActive) {
+                if (camera.videoUhdSupported) {
+                    Spacer(Modifier.width(6.dp))
+                    DaybreakChip(
+                        text = camera.videoQuality.ifEmpty { if (settings.videoUhd) "4K" else "1080p" },
+                        selected = false,
+                        mono = true,
+                        onClick = {
+                            if (!recordingNow) scope.launch { container.settings.setVideoUhd(!settings.videoUhd) }
+                        },
+                        modifier = Modifier.semantics { contentDescription = "Video quality ${camera.videoQuality}" },
+                    )
+                }
+                if (camera.videoHdrSupported) {
+                    Spacer(Modifier.width(6.dp))
+                    DaybreakChip(
+                        text = if (camera.videoHdrActive) "HDR" else "SDR",
+                        selected = camera.videoHdrActive,
+                        mono = true,
+                        onClick = {
+                            if (!recordingNow) scope.launch { container.settings.setVideoHdr(!settings.videoHdr) }
+                        },
+                        modifier = Modifier.semantics {
+                            contentDescription = if (camera.videoHdrActive) "HDR video on" else "HDR video off"
+                        },
+                    )
+                }
             }
             if (mode == CaptureMode.Photo && !useRaw) {
                 Spacer(Modifier.width(6.dp))
@@ -469,6 +557,9 @@ private fun CameraContent(
             burstProgress?.let { progress ->
                 BurstOverlay(progress, Modifier.align(Alignment.Center))
             }
+            recordingInfo?.let { info ->
+                RecordingTimer(info.durationMs, Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
+            }
             Box(
                 Modifier
                     .fillMaxSize()
@@ -496,8 +587,10 @@ private fun CameraContent(
         ModeSwitcher(
             mode = mode,
             onMode = {
-                mode = it
-                selectedControl = null
+                if (!recordingNow) {
+                    mode = it
+                    selectedControl = null
+                }
             },
         )
 
@@ -510,20 +603,81 @@ private fun CameraContent(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            LastPhotoButton(thumbnail = thumbnail, pending = pending, onClick = onOpenLibrary)
-            ShutterButton(onClick = ::capture, enabled = camera.ready && burstProgress == null)
+            LastPhotoButton(
+                thumbnail = thumbnail,
+                pending = pending,
+                onClick = { if (!recordingNow) onOpenLibrary() },
+            )
+            if (mode == CaptureMode.Video) {
+                RecordButton(recording = recordingNow, enabled = camera.ready && camera.videoActive, onClick = ::record)
+            } else {
+                ShutterButton(onClick = ::capture, enabled = camera.ready && burstProgress == null)
+            }
             DaybreakIconButton(
                 iconRes = DsR.drawable.ic_flip,
                 contentDescription = if (backCamera) "Switch to front camera" else "Switch to back camera",
                 background = colors.surface200,
                 size = 52.dp,
-                onClick = { backCamera = !backCamera },
+                tint = if (recordingNow) colors.ink.copy(alpha = 0.3f) else colors.ink,
+                onClick = { if (!recordingNow) backCamera = !backCamera },
             )
         }
     }
 }
 
 private const val APPLY_INTERVAL_MS = 50L
+
+/** The video shutter: a red dot that becomes a red square while recording. */
+@Composable
+private fun RecordButton(recording: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val colors = Daybreak.colors
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .size(80.dp)
+            .clip(CircleShape)
+            .border(4.dp, colors.ink.copy(alpha = if (enabled) 1f else 0.35f), CircleShape)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics { contentDescription = if (recording) "Stop recording" else "Record video" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(if (recording) 30.dp else 62.dp)
+                .clip(if (recording) RoundedCornerShape(8.dp) else CircleShape)
+                .background(colors.record.copy(alpha = if (enabled) 1f else 0.35f)),
+        )
+    }
+}
+
+/** A red dot and the time recorded so far. */
+@Composable
+private fun RecordingTimer(durationMs: Long, modifier: Modifier = Modifier) {
+    val colors = Daybreak.colors
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(colors.scrim)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .semantics { contentDescription = "Recording, ${formatDuration(durationMs)}" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(colors.record),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(formatDuration(durationMs), style = Daybreak.type.readout, color = colors.ink)
+    }
+}
 
 /** How far a Night or HDR burst has got. */
 private data class BurstProgress(val kind: BurstKind, val taken: Int, val total: Int) {

@@ -22,6 +22,7 @@ import com.brekwol.daybreak.data.Photo
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakTheme
 import com.brekwol.daybreak.edit.EditorScreen
+import com.brekwol.daybreak.video.TrimScreen
 import com.brekwol.daybreak.library.LibraryScreen
 import com.brekwol.daybreak.settings.SettingsScreen
 import com.brekwol.daybreak.viewer.ViewerScreen
@@ -39,6 +40,7 @@ private sealed interface Screen {
     data object Library : Screen
     data class Viewer(val photo: Photo) : Screen
     data class Editor(val photo: Photo) : Screen
+    data class Trim(val video: Photo) : Screen
     data object Settings : Screen
 }
 
@@ -76,7 +78,11 @@ private fun DaybreakApp() {
         }
         is Screen.Viewer -> DaybreakTheme(darkroom = true) {
             SystemBars()
-            ViewerScreen(photo = screen.photo, onBack = pop, onEdit = { push(Screen.Editor(it)) })
+            ViewerScreen(
+                photo = screen.photo,
+                onBack = pop,
+                onEdit = { push(if (it.isVideo) Screen.Trim(it) else Screen.Editor(it)) },
+            )
         }
         is Screen.Editor -> DaybreakTheme(darkroom = true) {
             SystemBars()
@@ -85,6 +91,15 @@ private fun DaybreakApp() {
                 onClose = pop,
                 // Show the new copy in place of the photo that was opened.
                 onSaved = { saved -> stack = stack.dropLast(2) + Screen.Viewer(saved) },
+            )
+        }
+        is Screen.Trim -> DaybreakTheme(darkroom = true) {
+            SystemBars()
+            TrimScreen(
+                video = screen.video,
+                onClose = pop,
+                // Show the new clip in place of the video that was opened.
+                onSaved = { clip -> stack = stack.dropLast(2) + Screen.Viewer(clip) },
             )
         }
         Screen.Settings -> DaybreakTheme {

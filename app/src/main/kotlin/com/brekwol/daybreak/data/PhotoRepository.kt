@@ -30,14 +30,36 @@ data class Photo(
     val height: Int,
     val format: PhotoFormat,
     val raw: Photo? = null,
+    /** Length of a video; 0 for photos. */
+    val durationMs: Long = 0L,
 ) {
     /** File name without the extension; a photo and its DNG share it. */
     val stem: String
         get() = name.substringBeforeLast('.')
 
-    /** "JXL", "HEIC", "RAW" or "JXL+RAW". */
+    val isVideo: Boolean
+        get() = format.isVideo
+
+    /** "JXL", "HEIC", "RAW", "JXL+RAW", or a video's length like "1:05". */
     val badge: String
-        get() = if (raw != null) "${format.badge}+RAW" else format.badge
+        get() = when {
+            isVideo -> formatDuration(durationMs)
+            raw != null -> "${format.badge}+RAW"
+            else -> format.badge
+        }
+}
+
+/** "0:07", "1:05" or "1:02:03". */
+fun formatDuration(ms: Long): String {
+    val total = (ms + 500) / 1000
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val seconds = total % 60
+    return if (hours > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.US, "%d:%02d", minutes, seconds)
+    }
 }
 
 sealed interface DeleteResult {
@@ -61,6 +83,9 @@ class PhotoRepository(context: Context) {
 
     /** MediaStore collection for images, used for DNGs written by the camera. */
     val imagesCollection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+    /** MediaStore collection for videos. */
+    val videosCollection: Uri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
     private val downloads = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
     /** A new file name stem like DB_20261028_221400_123, shared by a photo and its DNG. */
@@ -136,9 +161,45 @@ class PhotoRepository(context: Context) {
         }
     }
 
-    /** All Daybreak photos, newest first, with each DNG attached to its photo. */
-    suspend fun list(): List<Photo> = withContext(Dispatchers.IO) {
-        val all = (query(imagesCollection) + query(downloads)).distinctBy { it.uri }
+    /** MediaStore values for a video the camera records. */
+    fun videoValues(stem: String): ContentValues = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, "$stem.${PhotoFormat.Mp4.extension}")
+        put(MediaStore.MediaColumns.MIME_TYPE, PhotoFormat.Mp4.mime)
+        put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_PATH)
+    }
+
+    /** A new, still hidden video file in DCIM/Daybreak; [publish] it once written, or [discard] it. */
+    suspend fun newPendingVideo(stem: String): Uri = withContext(Dispatchers.IO) {
+        val values = videoValues(stem).apply {
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DATE_TAKEN, System.currentTimeMillis())
+        }
+        resolver.insert(videosCollection, values) ?: throw IOException("Android refused to create the video file")
+    }
+
+    suspend fun publish(uri: Uri) = withContext(Dispatchers.IO) {
+        resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        notifyChanged()
+    }
+
+    suspend fun discard(uri: Uri) = withContext(Dispatchers.IO) {
+        runCatching { resolver.delete(uri, null, null) }
+        Unit
+    }
+
+    /** The library entry of a video Daybreak recorded, by its MediaStore address. */
+    suspend fun findVideo(uri: Uri): Photo? {
+        val id = runCatching { ContentUris.parseId(uri) }.getOrNull() ?: return null
+        return list(includeVideos = true).firstOrNull { it.isVideo && it.id == id }
+    }
+
+    /**
+     * All Daybreak photos, newest first, with each DNG attached to its photo.
+     * [includeVideos] adds videos (the library shows them; "choose a photo" doesn't).
+     */
+    suspend fun list(includeVideos: Boolean = false): List<Photo> = withContext(Dispatchers.IO) {
+        val videos = if (includeVideos) queryVideos() else emptyList()
+        val all = (query(imagesCollection) + query(downloads) + videos).distinctBy { it.uri }
         all.groupBy { it.stem }
             .values
             .mapNotNull { group ->
@@ -187,6 +248,44 @@ class PhotoRepository(context: Context) {
                 }
         } catch (ignored: Exception) {
             // A collection this phone cannot query simply contributes nothing.
+        }
+        return result
+    }
+
+    private fun queryVideos(): List<Photo> {
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_ADDED,
+            MediaStore.MediaColumns.WIDTH,
+            MediaStore.MediaColumns.HEIGHT,
+            MediaStore.Video.VideoColumns.DURATION,
+        )
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"
+        val args = arrayOf("%Daybreak%", "%.mp4")
+        val result = mutableListOf<Photo>()
+        try {
+            resolver.query(videosCollection, projection, selection, args, "${MediaStore.MediaColumns.DATE_ADDED} DESC")
+                ?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(0)
+                        val name = cursor.getString(1) ?: continue
+                        result += Photo(
+                            id = id,
+                            uri = ContentUris.withAppendedId(videosCollection, id),
+                            name = name,
+                            sizeBytes = cursor.getLong(2),
+                            dateAddedSeconds = cursor.getLong(3),
+                            width = cursor.getInt(4),
+                            height = cursor.getInt(5),
+                            format = PhotoFormat.Mp4,
+                            durationMs = cursor.getLong(6),
+                        )
+                    }
+                }
+        } catch (ignored: Exception) {
+            // No videos to show.
         }
         return result
     }

@@ -17,7 +17,7 @@
 
 ---
 
-> **Status:** v0.4 "Modes", in progress: Night and HDR are in. Video, Scan and Portrait follow. See the [roadmap](#roadmap).
+> **Status:** v0.4 "Modes", in progress: Night, HDR and video are in. Scan and Portrait follow. See the [roadmap](#roadmap).
 
 ## What works now
 
@@ -26,6 +26,7 @@
 - **Focus modes**: Center (keeps focusing on the middle of the frame), Multi (the camera picks) and Manual (a distance dial from close-up to infinity)
 - **Night mode**: takes 6 to 8 short frames, lines them up to cancel hand shake, and merges them, leaving out anything that moved. Noise drops by more than half and dark scenes come out bright without long, blurry exposures
 - **HDR** (Off, Auto or On in Photo mode): merges a quick burst of darker frames, so windows and skies keep their detail while shadows open up. Auto steps in when part of the scene is blown out or the light is low
+- **Video**: 4K or 1080p, 10-bit HDR (HEVC, HLG) on cameras that offer it, stabilized where the camera can, with sound. Videos sit in the library with their length, play in the viewer, and can be **trimmed** and **muted**: the clip is cut without re-encoding, so it keeps the original's quality, and saved as a new video
 - Photos saved as **HEIC** (hardware HEVC encoder, shows in every gallery; the default) or **JPEG XL** (quality 50–100, lossless, effort Fast / Balanced / Smallest) in `DCIM/Daybreak`
 - **RAW + DNG** on cameras that support it: the DNG sits next to the photo and the library shows them as one
 - Live **histogram** and a **level** that turns gold when the phone is straight
@@ -39,7 +40,7 @@
 - Photos keep the right way up even when you point the phone at the sky or the floor
 - Updates itself from GitHub Releases: it checks once a day, downloads new versions on Wi-Fi and installs them when you tap Install (Settings › Updates)
 
-Not in yet: video, Scan, Portrait and masks. They follow the roadmap.
+Not in yet: Scan, Portrait, video speed and masks. They follow the roadmap.
 
 ## Why Daybreak
 
@@ -145,7 +146,7 @@ More modules (camera, editor, and so on) split out as the app grows.
 | v0.1.1 | In-app updates from GitHub Releases |
 | v0.2 Pro | Manual controls, RAW + DNG, HEIC, histogram, level, focus modes (done) |
 | v0.3 Editor | Light, Color, Curves, Detail, Crop, presets, share sheet (done) |
-| v0.4 Modes | HDR and Night (done), video recording and trim, Scan, Portrait |
+| v0.4 Modes | HDR and Night, video recording and trim (done), Scan, Portrait |
 | v0.5 Library+ | Albums, search, multi-select, masks, landscape and tablet layouts |
 | v1.0 | Accessibility, translations, release on F-Droid and Google Play |
 

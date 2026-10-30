@@ -66,7 +66,7 @@ fun LibraryScreen(
     val changes by container.photos.changes.collectAsStateWithLifecycle()
     var photos by remember { mutableStateOf<List<Photo>?>(null) }
     LaunchedEffect(changes) {
-        photos = container.photos.list()
+        photos = container.photos.list(includeVideos = true)
     }
 
     Box(
@@ -166,7 +166,7 @@ internal fun PhotoTile(photo: Photo, onClick: () -> Unit) {
             .clip(RoundedCornerShape(14.dp))
             .background(colors.surface200)
             .clickable(onClick = onClick)
-            .semantics { contentDescription = "Photo ${photo.name}" },
+            .semantics { contentDescription = (if (photo.isVideo) "Video " else "Photo ") + photo.name },
     ) {
         thumbnail?.let {
             Image(

@@ -3,6 +3,7 @@ package com.brekwol.daybreak.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.util.Size
 import com.brekwol.daybreak.engine.DaybreakEngine
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -24,6 +25,13 @@ class PhotoDecoder(
     suspend fun decode(photo: Photo, maxDimension: Int = 0): Bitmap = when (photo.format) {
         PhotoFormat.Jxl -> engine.decodeJxl(photos.readBytes(photo.uri), maxDimension)
         PhotoFormat.Heic, PhotoFormat.Dng -> decodeWithPlatform(photo, maxDimension)
+        PhotoFormat.Mp4 -> videoFrame(photo, maxDimension)
+    }
+
+    /** A still from a video, for thumbnails and posters. */
+    private suspend fun videoFrame(photo: Photo, maxDimension: Int): Bitmap = withContext(Dispatchers.IO) {
+        val size = if (maxDimension > 0) maxDimension else 1024
+        resolver.loadThumbnail(photo.uri, Size(size, size), null)
     }
 
     private suspend fun decodeWithPlatform(photo: Photo, maxDimension: Int): Bitmap =

@@ -12,7 +12,11 @@ enum class PhotoFormat(
     Jxl("jxl", "image/jxl", "JXL", "JPEG XL"),
     Heic("heic", "image/heic", "HEIC", "HEIC"),
     Dng("dng", "image/x-adobe-dng", "RAW", "RAW (DNG)"),
+    Mp4("mp4", "video/mp4", "VIDEO", "Video (MP4)"),
     ;
+
+    val isVideo: Boolean
+        get() = this == Mp4
 
     companion object {
         /** Formats a processed photo can be saved in. */

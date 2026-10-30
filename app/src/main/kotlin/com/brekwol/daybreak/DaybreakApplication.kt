@@ -9,6 +9,7 @@ import com.brekwol.daybreak.data.PhotoRepository
 import com.brekwol.daybreak.data.SaveQueue
 import com.brekwol.daybreak.data.SettingsRepository
 import com.brekwol.daybreak.data.ThumbnailLoader
+import com.brekwol.daybreak.data.VideoTrimmer
 import com.brekwol.daybreak.edit.EditStore
 import com.brekwol.daybreak.engine.DaybreakEngine
 import com.brekwol.daybreak.update.UpdateManager
@@ -39,6 +40,7 @@ class AppContainer(context: Context) {
     val thumbnails = ThumbnailLoader(context, decoder)
     val exporter = JpegExporter(context, decoder)
     val edits = EditStore(context)
+    val trimmer = VideoTrimmer(context, photos)
     val saveQueue = SaveQueue(appScope, engine, heic, photos, settings)
     val updates = UpdateManager(context, settings, appScope)
 }

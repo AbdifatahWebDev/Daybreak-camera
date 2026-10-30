@@ -1,6 +1,9 @@
 package com.brekwol.daybreak.viewer
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.text.format.DateFormat
 import android.widget.Toast
@@ -56,9 +59,13 @@ import androidx.compose.ui.unit.dp
 import com.brekwol.daybreak.container
 import com.brekwol.daybreak.data.DeleteResult
 import com.brekwol.daybreak.data.Photo
+import com.brekwol.daybreak.data.formatDuration
 import com.brekwol.daybreak.designsystem.Daybreak
 import com.brekwol.daybreak.designsystem.DaybreakIconButton
 import com.brekwol.daybreak.designsystem.FormatBadge
+import com.brekwol.daybreak.video.PlayerControls
+import com.brekwol.daybreak.video.VideoStage
+import com.brekwol.daybreak.video.rememberPlayerState
 import com.brekwol.daybreak.designsystem.R as DsR
 import java.util.Date
 import java.util.Locale
@@ -78,12 +85,15 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit, onEdit: (Photo) -> Unit) {
     val scope = rememberCoroutineScope()
 
     val state by produceState<Loaded>(initialValue = Loaded.Loading, photo.uri) {
+        // Videos play in their own view; only photos are decoded here.
+        if (photo.isVideo) return@produceState
         value = try {
             Loaded.Ready(container.decoder.decode(photo, maxDimension = 4096))
         } catch (error: Exception) {
             Loaded.Failed(error.message ?: "Could not open this photo")
         }
     }
+    val player = rememberPlayerState()
 
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -105,7 +115,9 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit, onEdit: (Photo) -> Unit) {
             .fillMaxSize()
             .background(colors.surface000),
     ) {
-        when (val current = state) {
+        if (photo.isVideo) {
+            VideoStage(photo.uri, player, Modifier.fillMaxSize())
+        } else when (val current = state) {
             Loaded.Loading -> CircularProgressIndicator(
                 color = colors.sun,
                 modifier = Modifier.align(Alignment.Center),
@@ -177,6 +189,15 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit, onEdit: (Photo) -> Unit) {
                 InfoPanel(photo = photo, state = state)
             }
 
+            if (photo.isVideo) {
+                PlayerControls(
+                    player,
+                    Modifier
+                        .background(colors.scrim)
+                        .padding(vertical = 6.dp),
+                )
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -184,8 +205,17 @@ fun ViewerScreen(photo: Photo, onBack: () -> Unit, onEdit: (Photo) -> Unit) {
                     .padding(vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceAround,
             ) {
-                ActionButton(DsR.drawable.ic_share, "Share", colors.ink) { sharing = true }
-                ActionButton(DsR.drawable.ic_edit, "Edit", colors.ink, enabled = state is Loaded.Ready) { onEdit(photo) }
+                ActionButton(DsR.drawable.ic_share, "Share", colors.ink) {
+                    if (photo.isVideo) shareVideo(context, photo) else sharing = true
+                }
+                if (photo.isVideo) {
+                    ActionButton(DsR.drawable.ic_crop, "Trim", colors.ink) {
+                        player.pause()
+                        onEdit(photo)
+                    }
+                } else {
+                    ActionButton(DsR.drawable.ic_edit, "Edit", colors.ink, enabled = state is Loaded.Ready) { onEdit(photo) }
+                }
                 ActionButton(DsR.drawable.ic_info, "Info", if (showInfo) colors.sun else colors.ink) {
                     showInfo = !showInfo
                 }
@@ -247,6 +277,7 @@ private fun InfoPanel(photo: Photo, state: Loaded) {
     val rows = buildList {
         add("Format" to photo.format.label)
         add("Resolution" to if (width > 0) "$width × $height" else "—")
+        if (photo.isVideo) add("Length" to formatDuration(photo.durationMs))
         add("File size" to formatSize(photo.sizeBytes))
         if (raw != null) add("RAW" to "DNG · ${formatSize(raw.sizeBytes)}")
         add("Saved in" to "DCIM/Daybreak")
@@ -305,4 +336,16 @@ private fun formatSize(bytes: Long): String = when {
     bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
     bytes >= 1_000 -> String.format(Locale.US, "%d KB", bytes / 1_000)
     else -> "$bytes B"
+}
+
+/** Videos are shared as they are: every app that takes videos can play MP4. */
+private fun shareVideo(context: Context, video: Photo) {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = video.format.mime
+        putExtra(Intent.EXTRA_STREAM, video.uri)
+        clipData = ClipData.newRawUri(video.name, video.uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching { context.startActivity(Intent.createChooser(send, "Share video")) }
+        .onFailure { Toast.makeText(context, "No app can receive this video", Toast.LENGTH_LONG).show() }
 }

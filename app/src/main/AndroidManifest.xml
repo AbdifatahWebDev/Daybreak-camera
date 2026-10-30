@@ -6,6 +6,8 @@
         android:required="true" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Sound for videos; videos are recorded without it if the permission is refused. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".DaybreakApplication"

@@ -51,6 +51,10 @@ data class DaybreakSettings(
     val lossless: Boolean = false,
     val grid: Boolean = true,
     val hdr: HdrMode = HdrMode.Auto,
+    /** Record 4K where the camera can (else 1080p). */
+    val videoUhd: Boolean = true,
+    /** Record 10-bit HDR (HLG) where the camera can. */
+    val videoHdr: Boolean = false,
     /** Look for a new version on GitHub once a day (GitHub builds only). */
     val updateAutoCheck: Boolean = true,
     /** Download a new version in the background when on Wi-Fi. */
@@ -81,6 +85,8 @@ class SettingsRepository(context: Context) {
         val lossless = booleanPreferencesKey("jxl_lossless")
         val grid = booleanPreferencesKey("grid")
         val hdr = stringPreferencesKey("hdr")
+        val videoUhd = booleanPreferencesKey("video_uhd")
+        val videoHdr = booleanPreferencesKey("video_hdr")
         val updateAutoCheck = booleanPreferencesKey("update_auto_check")
         val updateAutoDownload = booleanPreferencesKey("update_auto_download")
         val updatePreReleases = booleanPreferencesKey("update_pre_releases")
@@ -104,6 +110,8 @@ class SettingsRepository(context: Context) {
                 lossless = prefs[Keys.lossless] ?: false,
                 grid = prefs[Keys.grid] ?: true,
                 hdr = HdrMode.fromKey(prefs[Keys.hdr]),
+                videoUhd = prefs[Keys.videoUhd] ?: true,
+                videoHdr = prefs[Keys.videoHdr] ?: false,
                 updateAutoCheck = prefs[Keys.updateAutoCheck] ?: true,
                 updateAutoDownload = prefs[Keys.updateAutoDownload] ?: true,
                 updatePreReleases = prefs[Keys.updatePreReleases] ?: false,
@@ -149,6 +157,14 @@ class SettingsRepository(context: Context) {
 
     suspend fun setHdr(value: HdrMode) {
         store.edit { it[Keys.hdr] = value.key }
+    }
+
+    suspend fun setVideoUhd(value: Boolean) {
+        store.edit { it[Keys.videoUhd] = value }
+    }
+
+    suspend fun setVideoHdr(value: Boolean) {
+        store.edit { it[Keys.videoHdr] = value }
     }
 
     suspend fun setUpdateAutoCheck(value: Boolean) {

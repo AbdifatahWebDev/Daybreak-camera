@@ -47,7 +47,7 @@ import kotlin.math.roundToInt
 
 private const val FOCUS_TICKS = 101
 
-enum class CaptureMode(val label: String) { Night("Night"), Photo("Photo"), Pro("Pro") }
+enum class CaptureMode(val label: String) { Night("Night"), Photo("Photo"), Video("Video"), Pro("Pro") }
 
 enum class ProControl(val label: String) {
     Iso("ISO"),
