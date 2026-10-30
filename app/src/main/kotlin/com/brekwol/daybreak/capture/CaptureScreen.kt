@@ -194,6 +194,10 @@ private fun CameraContent(
             )
         }
     }
+    // Say once when video can't be exactly what was asked for (HDR or stabilization).
+    LaunchedEffect(camera.videoNotice) {
+        camera.videoNotice?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+    }
     val recordingInfo by session.recordingState.collectAsStateWithLifecycle()
     val recordingNow = recordingInfo != null
     // Bumped when a video is saved, so the thumbnail shows it.

@@ -26,6 +26,7 @@ import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.MeteringRectangle
 import android.media.ExifInterface
 import android.os.SystemClock
+import android.util.Log
 import android.util.Size
 import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraControl
@@ -100,6 +101,8 @@ data class CameraState(
     /** What the bound video use case records, e.g. "4K" and HDR on. */
     val videoQuality: String = "",
     val videoHdrActive: Boolean = false,
+    /** Why video isn't exactly what was asked for (HDR or stabilization not possible), or null. */
+    val videoNotice: String? = null,
 ) {
     /** Zoom presets for the pill: ultra-wide when present, 1×, 2×, 5×. */
     val zoomOptions: List<Float>
@@ -255,25 +258,23 @@ class CameraSession(context: Context) {
             val videoCapabilities = runCatching { Recorder.getVideoCapabilities(info) }.getOrNull()
             val hdrSupported = videoCapabilities?.supportedDynamicRanges?.contains(DynamicRange.HLG_10_BIT) == true
             val uhdSupported = videoCapabilities?.getSupportedQualities(DynamicRange.SDR)?.contains(Quality.UHD) == true
-            var videoQuality = ""
-            var videoHdr = false
-            val videoUseCase = if (video != null) {
-                videoHdr = video.hdr && hdrSupported
-                val range = if (videoHdr) DynamicRange.HLG_10_BIT else DynamicRange.SDR
-                val qualities = videoCapabilities?.getSupportedQualities(range).orEmpty()
-                val wanted = if (video.uhd && Quality.UHD in qualities) Quality.UHD else Quality.FHD
-                videoQuality = if (wanted == Quality.UHD) "4K" else "1080p"
-                val recorder = Recorder.Builder()
-                    .setQualitySelector(QualitySelector.from(wanted, FallbackStrategy.lowerQualityOrHigherThan(wanted)))
-                    .build()
-                val builder = VideoCapture.Builder(recorder).setDynamicRange(range)
-                if (videoCapabilities?.isStabilizationSupported == true) builder.setVideoStabilizationEnabled(true)
-                targetRotation?.let { builder.setTargetRotation(it) }
-                builder.build()
+            val stabilizationSupported = videoCapabilities?.isStabilizationSupported == true
+
+            // What to try binding, best first. Cameras that list HDR and stabilization
+            // can still refuse them together (or with the histogram stream), so video
+            // falls back step by step: without stabilization, then in SDR.
+            val candidates: List<VideoAttempt?> = if (video == null) {
+                listOf(null)
             } else {
-                null
+                buildList {
+                    if (video.hdr && hdrSupported) {
+                        if (stabilizationSupported) add(VideoAttempt(hdr = true, stabilized = true))
+                        add(VideoAttempt(hdr = true, stabilized = false))
+                    }
+                    if (stabilizationSupported) add(VideoAttempt(hdr = false, stabilized = true))
+                    add(VideoAttempt(hdr = false, stabilized = false))
+                }
             }
-            val main: UseCase = capture ?: videoUseCase ?: error("Nothing to bind")
 
             val analysis = if (histogram) {
                 ImageAnalysis.Builder()
@@ -292,17 +293,44 @@ class CameraSession(context: Context) {
             zoomSource?.removeObserver(zoomObserver)
             imageAnalysis?.clearAnalyzer()
             provider.unbindAll()
-            var withHistogram = analysis != null
-            val useCases: List<UseCase> = listOfNotNull(preview, main, analysis)
-            val bound = try {
-                provider.bindToLifecycle(owner, selector, *useCases.toTypedArray())
-            } catch (unsupported: IllegalArgumentException) {
-                // Some cameras can't stream preview, photo or video, and analysis (or RAW) together.
-                if (analysis == null) throw unsupported
-                analysis.clearAnalyzer()
-                withHistogram = false
-                provider.unbindAll()
-                provider.bindToLifecycle(owner, selector, preview, main)
+
+            var bound: Camera? = null
+            var withHistogram = false
+            var videoUseCase: VideoCapture<Recorder>? = null
+            var chosen: VideoAttempt? = null
+            var videoQuality = ""
+            var lastError: IllegalArgumentException? = null
+            for (attempt in candidates) {
+                val videoCase = attempt?.let { buildVideoCapture(it, video, videoCapabilities) }
+                val main: UseCase = capture ?: videoCase?.first ?: error("Nothing to bind")
+                // With the histogram stream first, then without it.
+                for (withAnalysis in listOfNotNull(analysis?.let { true }, false)) {
+                    try {
+                        val useCases = listOfNotNull(preview, main, if (withAnalysis) analysis else null)
+                        bound = provider.bindToLifecycle(owner, selector, *useCases.toTypedArray())
+                        withHistogram = withAnalysis
+                        break
+                    } catch (unsupported: IllegalArgumentException) {
+                        lastError = unsupported
+                        provider.unbindAll()
+                    }
+                }
+                if (bound != null) {
+                    videoUseCase = videoCase?.first
+                    videoQuality = videoCase?.second.orEmpty()
+                    chosen = attempt
+                    break
+                }
+            }
+            if (bound == null) throw lastError ?: IllegalStateException("The camera could not start.")
+            if (!withHistogram) analysis?.clearAnalyzer()
+            val videoHdr = chosen?.hdr == true
+            val notice = when {
+                video == null -> null
+                video.hdr && hdrSupported && !videoHdr -> "This phone can't record HDR here, so video is SDR"
+                videoHdr && stabilizationSupported && chosen?.stabilized == false ->
+                    "Stabilization is off: this phone can't stabilize HDR video"
+                else -> null
             }
 
             camera = bound
@@ -332,12 +360,41 @@ class CameraSession(context: Context) {
                 videoHdrSupported = hdrSupported,
                 videoQuality = videoQuality,
                 videoHdrActive = videoHdr,
+                videoNotice = notice,
             )
             applyPro(pro)
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            _state.update { it.copy(ready = false, error = error.message ?: "The camera could not start.") }
+            Log.e(TAG, "Binding the camera failed", error)
+            // The camera's own message is technical; say what to do instead.
+            val message = when {
+                error !is IllegalArgumentException -> error.message ?: "The camera could not start."
+                video != null -> "The camera can't record with these settings. Try 1080p or SDR."
+                else -> "The camera can't run this mode on this phone."
+            }
+            _state.update { it.copy(ready = false, error = message) }
         }
+    }
+
+    /** One way of setting up video, tried in turn until the camera accepts one. */
+    private data class VideoAttempt(val hdr: Boolean, val stabilized: Boolean)
+
+    /** The video use case for [attempt], and its quality label ("4K" or "1080p"). */
+    private fun buildVideoCapture(
+        attempt: VideoAttempt,
+        options: VideoOptions?,
+        capabilities: androidx.camera.video.VideoCapabilities?,
+    ): Pair<VideoCapture<Recorder>, String> {
+        val range = if (attempt.hdr) DynamicRange.HLG_10_BIT else DynamicRange.SDR
+        val qualities = capabilities?.getSupportedQualities(range).orEmpty()
+        val wanted = if (options?.uhd == true && Quality.UHD in qualities) Quality.UHD else Quality.FHD
+        val recorder = Recorder.Builder()
+            .setQualitySelector(QualitySelector.from(wanted, FallbackStrategy.lowerQualityOrHigherThan(wanted)))
+            .build()
+        val builder = VideoCapture.Builder(recorder).setDynamicRange(range)
+        if (attempt.stabilized) builder.setVideoStabilizationEnabled(true)
+        targetRotation?.let { builder.setTargetRotation(it) }
+        return builder.build() to if (wanted == Quality.UHD) "4K" else "1080p"
     }
 
     /** Applies Pro settings. [ProSettings] with every value null is fully automatic. */
@@ -740,6 +797,7 @@ class CameraSession(context: Context) {
     }
 
     private companion object {
+        const val TAG = "DaybreakCamera"
         const val LIVE_INTERVAL_MS = 150L
         const val STEADY_FRAME_NS = 33_333_333L
 
